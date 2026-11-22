@@ -1,0 +1,66 @@
+{
+  "debian_snapshot": "20261121T203158Z",
+  "inputs": {
+    "debian-image-factory": {
+      "datasource": "github-releases",
+      "depName": "foreverworks/debian-image-factory",
+      "description": "The factory release that builds these images. scripts/factory downloads this .pyz and refuses any other bytes.",
+      "extractVersion": "^v(?<version>.+)$",
+      "sha256": "f718b927fac4a3159cf75a62e3ce657a9c87e851fc5097b553198b360534ce00",
+      "url": "https://github.com/foreverworks/debian-image-factory/releases/download/v{version}/debian-image-factory-{version}.pyz",
+      "version": "0.6.2"
+    },
+    "node-22": {
+      "datasource": "node-version",
+      "depName": "node",
+      "module": "node",
+      "sha256": "cdeb8670a0c81f51b4dc4ac61919f9b1ad917b304bf8221eb939570663d240f8",
+      "signed_by": "node-release-keys",
+      "sums_url": "https://nodejs.org/dist/v{version}/SHASUMS256.txt.asc",
+      "url": "https://nodejs.org/dist/v{version}/node-v{version}-linux-x64.tar.xz",
+      "used_by": [
+        "node-22"
+      ],
+      "version": "22.23.5"
+    },
+    "node-24": {
+      "datasource": "node-version",
+      "depName": "node",
+      "module": "node",
+      "sha256": "4f2b175a6d53a5c617a80dba2676238a0688cef28c6da4eba35c7d844e66fcfb",
+      "signed_by": "node-release-keys",
+      "sums_url": "https://nodejs.org/dist/v{version}/SHASUMS256.txt.asc",
+      "url": "https://nodejs.org/dist/v{version}/node-v{version}-linux-x64.tar.xz",
+      "used_by": [
+        "node-24"
+      ],
+      "version": "24.22.3"
+    },
+    "node-26": {
+      "datasource": "node-version",
+      "depName": "node",
+      "module": "node",
+      "sha256": "5c063e46bab0fbc1c17cc445d7ff129cbdcd0471be6ed83b6ab864f8143bc864",
+      "signed_by": "node-release-keys",
+      "sums_url": "https://nodejs.org/dist/v{version}/SHASUMS256.txt.asc",
+      "url": "https://nodejs.org/dist/v{version}/node-v{version}-linux-x64.tar.xz",
+      "used_by": [
+        "node-26"
+      ],
+      "version": "26.13.1"
+    },
+    "node-release-keys": {
+      "description": "The Node.js release keyring that signs SHASUMS256.txt.asc, which fetch verifies every Node.js tarball against (signed_by). A trust root: moved by hand, as a reviewed diff, so no Renovate datasource.",
+      "module": "node",
+      "sha256": "140f2ad5260fd62773b6243ce8e1d3009645d558f121b8262c55e383dc285932",
+      "url": "https://raw.githubusercontent.com/nodejs/release-keys/{version}/gpg-only-active-keys/pubring.kbx",
+      "used_by": [
+        "node-22",
+        "node-24",
+        "node-26"
+      ],
+      "version": "481637f813e912c4aa3622d7964ab426c97b8e8d"
+    }
+  },
+  "schema": 2
+}

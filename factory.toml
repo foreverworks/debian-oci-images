@@ -1,0 +1,44 @@
+# The images this repository builds, read by the Debian Image Factory (its DESIGN.md, section 6.2).
+# Versions never appear here: they live in lock.json. Package names do.
+#
+# core      the minimal Debian 13 root filesystem every image starts from (not published as an image)
+# debian    core as a one-layer OCI image: ghcr.io/foreverworks/debian
+# node-<N>  debian plus the nodejs.org release tarball of Node.js N: ghcr.io/foreverworks/node
+#
+# Every supported Node.js LTS line has an image. A line leaves on its end-of-life date (DESIGN.md, 4).
+schema = 1
+
+[debian]
+suite = "trixie"                  # Debian 13
+components = ["main"]
+architectures = ["amd64"]
+
+[modules.node]
+use = "builtin:node-tarball"      # checked against Node.js's signed SHASUMS256.txt.asc at fetch
+
+[images.core]
+kind = "core"
+packages = ["ca-certificates", "tzdata"]
+
+[images.debian]
+kind = "oci"
+parent = "core"
+oci = { cmd = ["/bin/bash"], env = { LANG = "C.UTF-8" }, labels = { "org.opencontainers.image.title" = "debian", "org.opencontainers.image.description" = "Minimal Debian 13 (trixie) built from a pinned snapshot, with SBOM, provenance and test records", "org.opencontainers.image.licenses" = "MIT" } }
+
+[images.node-26]
+kind = "oci"
+parent = "debian"
+oci = { cmd = ["node"], labels = { "org.opencontainers.image.title" = "node", "org.opencontainers.image.description" = "Node.js 26 (LTS) from nodejs.org on Debian 13 (trixie), with SBOM, provenance and test records", "org.opencontainers.image.licenses" = "MIT" } }
+
+[images.node-24]
+kind = "oci"
+parent = "debian"
+oci = { cmd = ["node"], labels = { "org.opencontainers.image.title" = "node", "org.opencontainers.image.description" = "Node.js 24 (LTS) from nodejs.org on Debian 13 (trixie), with SBOM, provenance and test records", "org.opencontainers.image.licenses" = "MIT" } }
+
+[images.node-22]
+kind = "oci"
+parent = "debian"
+oci = { cmd = ["node"], labels = { "org.opencontainers.image.title" = "node", "org.opencontainers.image.description" = "Node.js 22 (LTS) from nodejs.org on Debian 13 (trixie), with SBOM, provenance and test records", "org.opencontainers.image.licenses" = "MIT" } }
+
+[checks]
+default = ["builtin"]

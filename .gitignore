@@ -1,0 +1,8 @@
+# The factory release and its work files (scripts/factory)
+/.factory/
+# Build output
+/out/
+/stage/
+/plan.json
+__pycache__/
+.mypy_cache/
