@@ -1,5 +1,7 @@
-# A version tag (v1.2.3) publishes a release. Only maintainers create tags; nothing else here ever
-# publishes.
+# A version tag (v1.2.3) publishes a release. A tag comes from release-next.yml, which tags a merge to
+# main that changed an input and dispatches this workflow on the tag, or from a maintainer, whose push
+# of the tag starts it. Only administrators may move or delete a v* tag (a ruleset), and the
+# environment `release` takes deployments from v* tags only. Nothing else here ever publishes.
 #
 # Two jobs, so the job that runs Debian's package scripts as root in a privileged builder never holds a
 # write token (DESIGN.md, section 6):
@@ -19,6 +21,7 @@ name: release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch: # on a tag, by release-next.yml: a tag the workflow token creates starts nothing
 
 permissions:
   contents: read

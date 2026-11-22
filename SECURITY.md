@@ -33,10 +33,12 @@ once images carrying the fix are available.
 
 ## How fixes reach the images
 
-Fixed Debian security updates reach the images through the nightly snapshot plan: the nightly workflow
-plans at the newest Debian snapshot and builds the images whose package set changed. A release then moves
-the lock to that snapshot and publishes the images and their tags, signed. A new Node.js patch release is
-picked up through a Renovate pull request and the same release process.
+Fixed Debian security updates reach the images on their own. Every three hours a workflow plans the
+newest Debian snapshot against the published images; when an upload changes one of them, Renovate opens
+a pull request that moves the lock to that snapshot. It merges itself once CI has built and tested every
+image, and the merge is released at once: published, verified, signed, then tagged. A new Node.js patch
+release takes the same path through its own Renovate pull request. Debian's snapshots are about six hours
+apart, so a fix usually reaches a release within a day of its upload, and nothing merges on a red check.
 
 Between a fix and a release, the images you already pulled are unchanged. Pin by digest, and update your
 pin when a release is published.

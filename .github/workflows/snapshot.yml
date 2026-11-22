@@ -1,0 +1,143 @@
+# Every three hours: does the newest Debian snapshot change any published image? If it does, this
+# workflow writes that snapshot to the `snapshot-feed` branch, and Renovate (renovate.json, the
+# debian-snapshot datasource) opens a pull request that moves lock.json's debian_snapshot to it. That
+# pull request merges itself once CI passes, and the merge releases (release-next.yml).
+#
+# The plan runs against what the last release published (the two ghcr.io repositories and the core
+# tarball on its GitHub release), so it answers exactly "would a release now build anything new?".
+# A snapshot whose uploads touch no package of these images builds nothing and moves nothing.
+#
+# Debian's snapshot service takes a snapshot about every six hours; running twice as often keeps the
+# delay after one under three hours. Planning downloads only the signed indices.
+#
+# Two jobs, so the job that talks to the archive never holds a write token (DESIGN.md, section 6).
+name: snapshot
+
+on:
+  schedule:
+    - cron: "41 */3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: snapshot
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: plan the newest snapshot against the last release
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    outputs:
+      changed: ${{ steps.plan.outputs.changed }}
+      snapshot: ${{ steps.plan.outputs.snapshot }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the version tags
+
+      # Between a merge and the end of its release the registry still holds the old images, so a plan
+      # now would propose a snapshot for what is already on its way.
+      - name: Is a release due or under way?
+        id: busy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          python3 scripts/release_next.py pending > busy.txt
+          cat busy.txt >> "$GITHUB_OUTPUT"
+          running=0
+          for workflow in release-next.yml release.yml; do
+            for status in queued in_progress waiting pending requested; do
+              count=$(gh run list --repo "$REPO" --workflow "$workflow" --status "$status" --json databaseId --jq length)
+              running=$((running + count))
+            done
+          done
+          echo "running=$running" >> "$GITHUB_OUTPUT"
+          if grep -q '^pending=true' busy.txt || [ "$running" != 0 ]; then
+            echo "Skipped: main holds inputs no release has published yet ($(cat busy.txt)), or $running release runs are not finished. If this lasts, read the release-next and release runs." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: System packages (apt, gpgv and Debian's archive keyring, which planning needs)
+        if: steps.busy.outputs.pending == 'false' && steps.busy.outputs.running == '0'
+        run: |
+          set -eu
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends apt gpgv debian-archive-keyring curl
+          test -s /usr/share/keyrings/debian-archive-keyring.pgp
+
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+        if: steps.busy.outputs.pending == 'false' && steps.busy.outputs.running == '0'
+        with:
+          cosign-release: v3.1.4
+
+      - name: The factory release the repository pins, signature verified, without the builder (this job never builds)
+        if: steps.busy.outputs.pending == 'false' && steps.busy.outputs.running == '0'
+        env:
+          FACTORY_COSIGN: required
+          FACTORY_BUILDER: skip
+        run: scripts/factory install
+
+      - name: Plan at the newest snapshot against what the last release published
+        id: plan
+        if: steps.busy.outputs.pending == 'false' && steps.busy.outputs.running == '0'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          mkdir -p work
+          tag=$(gh release view --repo "$REPO" --json tagName --jq .tagName)
+          scripts/factory plan --snapshot latest \
+            --against oci://ghcr.io/foreverworks/debian --against oci://ghcr.io/foreverworks/node \
+            --against "github-release://$REPO@$tag" --out work/plan.json
+          python3 scripts/images.py plan work/plan.json > work/states.txt
+          cat work/states.txt
+          grep '^changed=' work/states.txt >> "$GITHUB_OUTPUT"
+          snapshot=$(jq -r .snapshot work/plan.json)
+          echo "$snapshot" | grep -Eq '^[0-9]{8}T[0-9]{6}Z$' || { echo "the plan's snapshot is $snapshot" >&2; exit 1; }
+          echo "snapshot=$snapshot" >> "$GITHUB_OUTPUT"
+          {
+            echo "Planned at $snapshot against release $tag:"
+            echo '```'
+            cat work/states.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  feed:
+    name: write the snapshot for Renovate
+    needs: plan
+    if: needs.plan.outputs.changed == 'true'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: write # the snapshot-feed branch only: one orphan commit holding debian-snapshot.json
+    steps:
+      - name: Write debian-snapshot.json to the snapshot-feed branch, unless it already holds this snapshot
+        env:
+          SNAPSHOT: ${{ needs.plan.outputs.snapshot }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
+        run: |
+          set -eu
+          now=$(gh api "repos/$REPO/contents/debian-snapshot.json?ref=snapshot-feed" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+          if printf '%s' "$now" | grep -q "\"$SNAPSHOT\""; then
+            echo "the feed already holds $SNAPSHOT"
+            exit 0
+          fi
+          mkdir feed
+          cd feed
+          git init --quiet --initial-branch=snapshot-feed
+          printf '{"releases": [{"version": "%s"}]}\n' "$SNAPSHOT" > debian-snapshot.json
+          git add debian-snapshot.json
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit --quiet -m "Debian snapshot $SNAPSHOT"
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          git -c http.extraheader="AUTHORIZATION: basic $auth" push --quiet --force "$SERVER/$REPO" HEAD:refs/heads/snapshot-feed
+          echo "the feed now holds $SNAPSHOT" >> "$GITHUB_STEP_SUMMARY"

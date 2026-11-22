@@ -155,6 +155,25 @@ class WritePermissionTests(unittest.TestCase):
     def test_another_workflow_may_not_write_contents(self) -> None:
         self.assertEqual(len(policy.check_write_permissions(".github/workflows/ci.yml", self.RENOVATE)), 2)
 
+    RELEASE_NEXT = "jobs:\n  tag:\n    permissions:\n      contents: write\n      actions: write\n"
+    SNAPSHOT = "jobs:\n  plan:\n    steps: []\n  feed:\n    permissions:\n      contents: write\n"
+
+    def test_the_tag_job_of_release_next_may_write_contents_and_actions(self) -> None:
+        self.assertEqual(policy.check_write_permissions(".github/workflows/release-next.yml", self.RELEASE_NEXT), [])
+
+    def test_the_tag_job_may_not_write_packages(self) -> None:
+        text = self.RELEASE_NEXT + "      packages: write\n"
+        self.assertEqual(len(policy.check_write_permissions("release-next.yml", text)), 1)
+
+    def test_the_feed_job_of_snapshot_may_write_contents_only(self) -> None:
+        self.assertEqual(policy.check_write_permissions(".github/workflows/snapshot.yml", self.SNAPSHOT), [])
+        text = self.SNAPSHOT + "      actions: write\n"
+        self.assertEqual(len(policy.check_write_permissions("snapshot.yml", text)), 1)
+
+    def test_the_plan_job_of_snapshot_may_not_write(self) -> None:
+        text = "jobs:\n  plan:\n    permissions:\n      contents: write\n"
+        self.assertEqual(len(policy.check_write_permissions("snapshot.yml", text)), 1)
+
 
 class BuilderRefTests(unittest.TestCase):
     REF = "ghcr.io/example/builder:v0.6.3@sha256:" + "c" * 64

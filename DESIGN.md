@@ -180,10 +180,41 @@ runs the build in a container with no network; under a rootful Docker, `--privil
 factory DESIGN 5.4). The runner is a throwaway machine, and the one job that holds a write token never
 runs a build.
 
-The one other job that may write is `checksums` in `renovate-checksums.yml` (`contents` and `actions`,
-enforced by `scripts/policy.py`). It runs only `actions/checkout` and the pinned input-lock Action, never
-this repository's scripts or a package's, and it runs only on pushes to Renovate's branches and
-commits only to the branch it was started on. It needs `actions` to dispatch `ci.yml` on that branch.
+Three other jobs may write, each only the scopes `scripts/policy.py` allows it, and none runs a build:
+
+- `checksums` in `renovate-checksums.yml` (`contents`, `actions`). It runs only `actions/checkout` and the
+  pinned input-lock Action, never this repository's scripts or a package's, and it runs only on pushes to
+  Renovate's branches and commits only to the branch it was started on. It needs `actions` to dispatch
+  `ci.yml` on that branch.
+- `tag` in `release-next.yml` (`contents`, `actions`), on `main` only. It runs `git` and
+  `scripts/release_next.py`, creates one version tag and dispatches `release.yml` on it.
+- `feed` in `snapshot.yml` (`contents`). It checks nothing out; it force-pushes one orphan commit holding
+  `debian-snapshot.json` to the branch `snapshot-feed`.
+
+**How an update reaches the images.** Every update is a pull request that merges itself once CI passes,
+and every merge that changes an input (`lock.json`, `factory.toml`, `builder.ref`) is released:
+
+1. Renovate opens the pull request: a Node.js version, a factory release (its `.pyz` in the lock and
+   its builder in `builder.ref`, together), a pinned Action, or the Debian snapshot (`snapshot.yml`
+   below). `renovate-checksums.yml` commits new checksums to the branch and dispatches CI on it.
+2. Renovate enables GitHub's auto-merge (`platformAutomerge`). The ruleset `protect main` requires both
+   CI jobs, so the pull request merges only when the static checks and the build and test of every
+   image pass on its last commit.
+3. Renovate's merge is a push to `main` by its App, which starts `ci.yml` and `release-next.yml`.
+   `release-next.yml` tags the merge with the next patch version when an input changed, and dispatches
+   `release.yml` on that tag (a tag the workflow token creates starts no workflow by itself). Only the
+   head of `main` releases, and only a commit that descends from the newest release.
+
+When something stops halfway:
+
+- The tag was made but the dispatch failed: re-run `release-next.yml` on `main`; it finds the tag on the
+  commit and dispatches again, unless the tag already has its GitHub release.
+- The release failed: re-run its failed jobs (every step before the tags move is idempotent). Until a
+  release of the newest inputs succeeds, `snapshot.yml` skips its plan and says so in its summary.
+- A factory release whose builder image is not yet in the registry when Renovate looks gives a pull
+  request that moves only the `.pyz`. `scripts/policy.py` fails it (builder.ref must name the same
+  version), so it waits, red, until Renovate's next run adds the builder.
+- Action bumps wait three days after their release (`minimumReleaseAge`); image inputs do not.
 
 ### ci.yml
 
@@ -211,14 +242,30 @@ and `test`, so its `ancestry` check runs and the child passes and is kept as goo
   nothing, at the cost of a few index downloads.
 - It never publishes to `ghcr.io` and never moves a tag. Its role is to tell a maintainer, by a failing run,
   that the next release would not build or pass.
-- It does not move the lock: a person does, when a release is wanted.
+- It does not move the lock: `snapshot.yml` and Renovate do.
+
+### snapshot.yml
+
+Every three hours and on demand. One read-only job plans at the **newest** snapshot against what the
+last release published: `oci://ghcr.io/foreverworks/debian`, `oci://ghcr.io/foreverworks/node` and the
+core tarball on the newest GitHub release. `changed=true` means a release now would build something
+new: a Debian upload touched a package of an image. A second job then writes that snapshot ID to
+`debian-snapshot.json` on the branch `snapshot-feed`, which Renovate reads as the custom datasource
+`debian-snapshot` and turns into a pull request moving `debian_snapshot` in the lock.
+
+The plan is skipped while a release is due or under way (`scripts/release_next.py pending`, or a
+`release-next.yml` or `release.yml` run not yet finished): until it finishes the registry holds the old
+images, and the plan would propose a snapshot for changes already on their way. Debian's snapshot
+service takes a snapshot about every six hours, so a relevant upload reaches a pull request within
+about three hours of its snapshot, plus Renovate's own schedule.
 
 The cache stands in for the registry because the real target does not exist before the first release
 (section 9).
 
 ### release.yml
 
-On a push of a tag `v*`, which only maintainers create; the tag must be `vMAJOR.MINOR.PATCH` on `main`. Two jobs, with permissions split:
+On a push of a tag `v*` by a maintainer, or dispatched on a tag by `release-next.yml`; the tag must be
+`vMAJOR.MINOR.PATCH` on `main`. Two jobs, with permissions split:
 
 1. **build**: read-only token. Builds and tests everything and uploads the output as an artifact.
 2. **publish**: `packages: write`, `contents: write` and `id-token: write`, in the environment `release`.
@@ -242,23 +289,32 @@ Reusing images in a release is a decision for the maintainers (section 9).
 must never hold a token that can write packages or releases, or sign as this repository: a hostile
 package script could use it. The second job holds the write permissions and runs only the factory's
 publish and verify, cosign and oras, on bytes the first job produced. The `release` environment accepts
-deployments from `v*` tags only, and a tag ruleset lets only repository administrators create, move or
-delete `v*` tags; both are repository settings (section 6.1). A `release.yml` on any other ref, or a tag
-someone without that role pushed, therefore never reaches the write permissions.
+deployments from `v*` tags only, and a tag ruleset lets only repository administrators move or delete
+`v*` tags; both are repository settings (section 6.1). Creating a `v*` tag needs write access: only the
+administrators have it, and among the workflows only `release-next.yml`'s `tag` job uses it for tags
+(GitHub does not accept GitHub Actions as a bypass actor of a repository ruleset, so creation cannot be
+limited to it by a rule). A `release.yml` on any other ref therefore never reaches the write
+permissions, and a published tag never moves to other bytes.
 
 **The order matters.** Tags move last. If the build fails, the checks fail, the verification fails or
 the signature fails, the old tags stay where they are and nothing a user pulls by tag has changed.
 Tags then move one image at a time: a failure inside that last loop leaves some images on new tags and
 some on old ones, and a re-run of the publish job completes the set (every step before it is idempotent).
 
-Nothing is published to any registry before the owner approves the first release tag.
+The first release, v0.1.0, was tagged by hand; every later one follows a merge (above).
 
 ### 6.1 Repository settings the files cannot enforce
 
 - Actions: every Action pinned by full SHA (required), the workflow token read-only by default, and
   approval required for every outside contributor's pull request.
-- Ruleset `protect main`: no deletion, no force push. Ruleset `release tags`: only repository
-  administrators create, update or delete tags matching `v*`.
+- Ruleset `protect main`: no deletion, no force push, and the status checks `static checks` and
+  `build and test every image` (from GitHub Actions) required on every change; repository administrators
+  may bypass it. Ruleset `release tags`: only repository administrators update or delete tags matching
+  `v*`; creating one needs write access, which only administrators have. **Write access is release
+  access**: anyone who can push a branch can dispatch a workflow from it and create a `v*` tag, so grant
+  write only to people trusted to sign releases.
+- Pull requests: auto-merge allowed, branches deleted after merge.
+- Renovate: the Renovate App has access to this repository.
 - Environment `release`: deployments only from tags matching `v*`.
 - Packages: after the first release, `ghcr.io/foreverworks/debian` and `ghcr.io/foreverworks/node` are
   set to public by an administrator (a package GitHub creates from a workflow starts private), and an

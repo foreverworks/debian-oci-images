@@ -11,8 +11,9 @@ Rules:
 - builder.ref names the tag v<lock's factory version> and a sha256 digest;
 - every node-<N> image of factory.toml has a lock entry node-<N> of Node.js N, used by that image only;
 - every oci image of factory.toml has a repository to be published to.
-- a `<scope>: write` permission appears only in the publish job of release.yml, and in the checksums job
-  of renovate-checksums.yml (contents and actions only).
+- a `<scope>: write` permission appears only in the publish job of release.yml, the checksums job of
+  renovate-checksums.yml (contents and actions only), the tag job of release-next.yml (contents and
+  actions only) and the feed job of snapshot.yml (contents only).
 
 Prints every problem found and exits 1, or prints nothing and exits 0.
 """
@@ -47,6 +48,8 @@ JOB_RE = re.compile(r"^  (?P<job>[A-Za-z0-9_-]+):\s*(?:#.*)?$")
 WRITERS: dict[tuple[str, str], frozenset[str] | None] = {
     ("release.yml", "publish"): None,
     ("renovate-checksums.yml", "checksums"): frozenset({"contents", "actions"}),
+    ("release-next.yml", "tag"): frozenset({"contents", "actions"}),
+    ("snapshot.yml", "feed"): frozenset({"contents"}),
 }
 
 

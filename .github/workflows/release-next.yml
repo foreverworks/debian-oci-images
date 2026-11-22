@@ -1,0 +1,77 @@
+# A merge to main that changes what the images are built from (scripts/release_next.py INPUTS:
+# lock.json, factory.toml, builder.ref) releases them. This workflow tags the merge commit with the
+# next patch version and starts release.yml on that tag, which builds, tests, publishes, verifies and
+# signs as for any release.
+#
+# A tag this workflow creates starts no workflow by itself (the workflow token's pushes never do), so
+# it dispatches release.yml on the tag. Only this job holds `contents: write` on main
+# (scripts/policy.py), and the tag ruleset lets only administrators move or delete a v* tag.
+#
+# A push that changes no input does nothing. If the dispatch failed after the tag was made, re-run this
+# workflow on main: it finds the tag on the commit and starts the release again.
+name: release next
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-next
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: tag the next version and start the release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # the version tag
+      actions: write # dispatches release.yml on that tag
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the version tags
+
+      # Only the newest commit of main releases: a re-run of an older push does nothing.
+      - name: The next version, if the inputs changed since the last release
+        id: next
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          head=$(git rev-parse origin/main)
+          if [ "$head" != "$SHA" ]; then
+            echo "$SHA is not the head of main ($head): nothing to release" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 scripts/release_next.py next "$SHA" > next.txt
+          cat next.txt
+          cat next.txt >> "$GITHUB_OUTPUT"
+
+      # A tag that already names this commit (new=false) is a run whose dispatch failed: a re-run starts
+      # the release again unless the tag already has its GitHub release.
+      - name: Tag the commit and start the release
+        if: steps.next.outputs.tag != ''
+        env:
+          TAG: ${{ steps.next.outputs.tag }}
+          NEW: ${{ steps.next.outputs.new }}
+          SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          if [ "$NEW" = true ]; then
+            gh api "repos/$REPO/git/refs" -f "ref=refs/tags/$TAG" -f "sha=$SHA" > /dev/null
+          elif gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
+            echo "$TAG is already released" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh workflow run release.yml --repo "$REPO" --ref "$TAG"
+          echo "Tagged $SHA as $TAG and started release.yml on it." >> "$GITHUB_STEP_SUMMARY"

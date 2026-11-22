@@ -1,7 +1,39 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", "helpers:pinGitHubActionDigests", "github>foreverworks/input-lock#v0.2.0"],
+  "automerge": true,
+  "platformAutomerge": true,
+  "automergeType": "pr",
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "The Debian snapshot the images are built at. snapshot.yml writes the newest snapshot that changes a published image to the snapshot-feed branch; this moves lock.json to it.",
+      "managerFilePatterns": ["/(^|/)lock\\.json$/"],
+      "matchStrings": ["\"debian_snapshot\":\\s*\"(?<currentValue>[0-9]{8}T[0-9]{6}Z)\""],
+      "depNameTemplate": "debian-snapshot",
+      "datasourceTemplate": "custom.debian-snapshot",
+      "versioningTemplate": "regex:^(?<major>[0-9]{4})(?<minor>[0-9]{4})T(?<patch>[0-9]{6})Z$"
+    },
+    {
+      "customType": "regex",
+      "description": "The factory's builder image, by tag and digest. It moves with the factory's .pyz in lock.json, in one pull request.",
+      "managerFilePatterns": ["/^builder\\.ref$/"],
+      "matchStrings": ["^(?<depName>[^:\\s]+):(?<currentValue>v[0-9][^@\\s]*)@(?<currentDigest>sha256:[0-9a-f]{64})"],
+      "datasourceTemplate": "docker"
+    }
+  ],
+  "customDatasources": {
+    "debian-snapshot": {
+      "defaultRegistryUrlTemplate": "https://raw.githubusercontent.com/foreverworks/debian-oci-images/snapshot-feed/debian-snapshot.json",
+      "format": "json"
+    }
+  },
   "packageRules": [
+    {
+      "description": "A new Action version waits three days before its pull request: an Action runs with the workflow's token, and a bad release is usually withdrawn within that time. Image inputs do not wait.",
+      "matchManagers": ["github-actions"],
+      "minimumReleaseAge": "3 days"
+    },
     {
       "description": "Each Node.js image follows one LTS line: Renovate moves its version inside that major only. A new LTS line gets a new image by hand (DESIGN.md, section 3).",
       "matchDatasources": ["node-version"],
@@ -9,9 +41,15 @@
       "enabled": false
     },
     {
-      "description": "The factory's .pyz and its builder image move together: builder.ref is edited in the same pull request (scripts/policy.py refuses a mismatch).",
-      "matchDepNames": ["foreverworks/debian-image-factory"],
+      "description": "The factory's .pyz and its builder image move together: builder.ref changes in the same pull request (scripts/policy.py refuses a mismatch).",
+      "matchDepNames": ["foreverworks/debian-image-factory", "ghcr.io/foreverworks/debian-image-factory-builder"],
       "groupName": "debian-image-factory"
+    },
+    {
+      "description": "A new Debian snapshot is one pull request, replaced while it waits, and it merges like every other update once CI passes.",
+      "matchDepNames": ["debian-snapshot"],
+      "commitMessageTopic": "the Debian snapshot",
+      "prBodyNotes": ["snapshot.yml found that this snapshot changes a published image: a Debian upload (often a security fix) touched one of their packages."]
     }
   ]
 }

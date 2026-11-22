@@ -3,10 +3,9 @@
 Public Debian 13 (trixie) and Node.js base images, built from pinned inputs, with a software bill of
 materials, build provenance and test results attached to every image.
 
-> **Status: nothing is published yet.** The first release is pending. The images below will appear at
-> `ghcr.io/foreverworks/debian` and `ghcr.io/foreverworks/node` when the first release tag is
-> approved. Until then, everything here describes what the release will do, and you can build the
-> images yourself (see [Build it yourself](#build-it-yourself)).
+> **Status: published.** The images are at `ghcr.io/foreverworks/debian` and `ghcr.io/foreverworks/node`,
+> since release v0.1.0, and a new release follows every update (see
+> [How the images stay current](#how-the-images-stay-current)).
 
 ## The problem
 
@@ -165,11 +164,17 @@ factory's own wording is in its
   whose inputs changed, and a child built alone is tested against its parent as the cache holds it.
   A quiet night builds nothing. Nightly builds go to a cache and are never pushed
   to `ghcr.io`: they exist to show that the next release would build and pass its checks.
-- **Renovate** opens a pull request for each new Node.js patch or minor version inside a supported line,
-  and for a new factory release. A workflow then commits the new checksums to Renovate's branch. It never moves a line to the next major version.
-- **Releases are deliberate.** A person creates a version tag. The release workflow builds and tests
-  everything, publishes, verifies what it pushed, signs it, and only then moves the tags. Debian
-  security updates reach the images through the snapshot the nightly plan found, in the next release.
+- **Debian updates.** Every three hours a workflow plans the newest Debian snapshot against what the last
+  release published. When a Debian upload (often a security fix) changes one of the images, Renovate
+  opens a pull request that moves the lock to that snapshot. A snapshot that touches none of their
+  packages changes nothing.
+- **Renovate** also opens a pull request for each new Node.js patch or minor version inside a supported line,
+  for a new factory release and for the pinned Actions. A workflow then commits the new checksums to Renovate's branch. It never moves a line to the next major version.
+- **Every Renovate pull request merges itself once CI passes**, and CI builds and tests every image.
+  Nothing merges on a red check. Pull requests from people are merged by a maintainer.
+- **Every merge that changes an input is released.** A workflow tags the merge with the next patch
+  version, and the release workflow builds and tests everything, publishes, verifies what it pushed,
+  signs it, and only then moves the tags. A maintainer can still tag a release by hand.
 - **Tags move only to builds that passed.** If a check fails, the old tag stays where it is.
 
 [DESIGN.md, section 6](DESIGN.md#6-workflows) has the details.
@@ -208,7 +213,7 @@ root on the host. Build on a machine, or a CI runner, that you do not mind runni
 | `lock.json` | Every version and checksum: the Debian snapshot, the factory, each Node.js tarball, the release keyring. |
 | `builder.ref` | The builder image, by digest. |
 | `scripts/` | Small glue around the factory, and the checks that keep this repository honest. |
-| `.github/workflows/` | CI, the nightly plan and the release. |
+| `.github/workflows/` | CI, the nightly plan, the snapshot check, the automatic release and the release itself. |
 | [DESIGN.md](DESIGN.md) | Why it is built this way. |
 | [SECURITY.md](SECURITY.md) | How to report a vulnerability. |
 
