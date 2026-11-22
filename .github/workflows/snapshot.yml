@@ -57,8 +57,10 @@ on:
 permissions:
   contents: read
 
+# A Node.js run only ticks the dashboard, so it queues apart: a later Debian plan or cron run never
+# replaces a pending Node one (a group keeps one pending run and drops the older).
 concurrency:
-  group: snapshot
+  group: snapshot-${{ (github.event.client_payload.source == 'node' || inputs.source == 'node') && 'node' || 'plan' }}
   cancel-in-progress: false
 
 jobs:
