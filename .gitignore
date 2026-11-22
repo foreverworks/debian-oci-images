@@ -2,7 +2,7 @@
 /.factory/
 # Build output
 /out/
-/stage/
+/work/
 /plan.json
 __pycache__/
 .mypy_cache/

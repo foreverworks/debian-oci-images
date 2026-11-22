@@ -1,7 +1,6 @@
 import contextlib
 import io
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -157,7 +156,7 @@ def make_layout(out: Path, image: str, hex_digest: str = HEX, records: bool = Tr
     return name
 
 
-class LayoutsAndStageTests(unittest.TestCase):
+class LayoutsAndRepositoriesTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -198,45 +197,23 @@ class LayoutsAndStageTests(unittest.TestCase):
         with self.assertRaisesRegex(images.ImageError, "not a directory"):
             images.read_layouts(self.root / "missing")
 
-    def test_stage_hard_links(self) -> None:
-        debian = make_layout(self.out, "debian", "a" * 64)
-        n26 = make_layout(self.out, "node-26", "b" * 64)
-        n24 = make_layout(self.out, "node-24", "c" * 64)
-        (self.out / "plan.json").write_text("{}", encoding="utf-8")
-        stage = self.root / "stage"
-        result = images.stage(self.out, stage)
-        self.assertEqual(result, [("debian", stage / "debian"), ("node", stage / "node")])
-        self.assertEqual(sorted(p.name for p in (stage / "node").iterdir()), sorted([n24, n26, "b" * 64 + ".intoto.jsonl", "c" * 64 + ".intoto.jsonl", "plan.json"]))
-        self.assertEqual(sorted(p.name for p in (stage / "debian").iterdir()), sorted([debian, "a" * 64 + ".intoto.jsonl", "plan.json"]))
-        blob = Path("blobs") / "sha256" / "blob"
-        self.assertTrue(os.path.samefile(self.out / debian / blob, stage / "debian" / debian / blob))
-        self.assertTrue(os.path.samefile(self.out / "plan.json", stage / "node" / "plan.json"))
-        self.assertTrue(
-            os.path.samefile(self.out / ("c" * 64 + ".intoto.jsonl"), stage / "node" / ("c" * 64 + ".intoto.jsonl"))
+    def test_repositories_group_the_node_images(self) -> None:
+        make_layout(self.out, "node-26", "b" * 64)
+        make_layout(self.out, "debian", "a" * 64)
+        make_layout(self.out, "node-24", "c" * 64)
+        self.assertEqual(
+            images.repositories(images.read_layouts(self.out)),
+            [("debian", ["debian"]), ("node", ["node-24", "node-26"])],
         )
 
-    def test_stage_without_plan(self) -> None:
-        make_layout(self.out, "debian")
-        images.stage(self.out, self.root / "stage")
-        self.assertFalse((self.root / "stage" / "debian" / "plan.json").exists())
+    def test_repositories_of_one_image(self) -> None:
+        make_layout(self.out, "node-22")
+        self.assertEqual(images.repositories(images.read_layouts(self.out)), [("node", ["node-22"])])
 
-    def test_stage_accepts_an_empty_directory(self) -> None:
-        make_layout(self.out, "debian")
-        (self.root / "stage").mkdir()
-        images.stage(self.out, self.root / "stage")
-
-    def test_stage_refuses_a_used_directory(self) -> None:
-        make_layout(self.out, "debian")
-        (self.root / "stage").mkdir()
-        (self.root / "stage" / "old").write_text("x", encoding="utf-8")
-        with self.assertRaisesRegex(images.ImageError, "not empty"):
-            images.stage(self.out, self.root / "stage")
-
-    def test_stage_refuses_an_unknown_image(self) -> None:
+    def test_repositories_refuse_an_unknown_image(self) -> None:
         make_layout(self.out, "python")
         with self.assertRaisesRegex(images.ImageError, "unknown image"):
-            images.stage(self.out, self.root / "stage")
-        self.assertFalse((self.root / "stage").exists())
+            images.repositories(images.read_layouts(self.out))
 
 
 def plan_text(**states: dict[str, str]) -> str:
@@ -245,16 +222,16 @@ def plan_text(**states: dict[str, str]) -> str:
 
 class PlanTests(unittest.TestCase):
     def test_changed(self) -> None:
-        text = plan_text(core={"state": "reuse", "artifact": "ab" * 32}, debian={"state": "build"})
+        text = plan_text(core={"state": "reuse", "artifact": "sha256:" + "ab" * 32}, debian={"state": "build"})
         self.assertEqual(
-            images.plan_lines(text), ["core reuse " + "ab" * 32, "debian build", "changed=true"]
+            images.plan_lines(text), ["core reuse sha256:" + "ab" * 32, "debian build", "changed=true"]
         )
 
     def test_quiet(self) -> None:
-        text = plan_text(core={"state": "reuse", "artifact": "ab" * 32}, debian={"state": "wait", "artifact": "cd" * 32})
+        text = plan_text(core={"state": "reuse", "artifact": "sha256:" + "ab" * 32}, debian={"state": "wait", "artifact": "sha256:" + "cd" * 32})
         self.assertEqual(
             images.plan_lines(text),
-            ["core reuse " + "ab" * 32, "debian wait " + "cd" * 32, "changed=false"],
+            ["core reuse sha256:" + "ab" * 32, "debian wait sha256:" + "cd" * 32, "changed=false"],
         )
 
     def test_refusals(self) -> None:
@@ -266,6 +243,8 @@ class PlanTests(unittest.TestCase):
             plan_text(core={"state": "fresh"}),
             plan_text(core={}),
             plan_text(core={"state": "reuse"}),
+            plan_text(core={"state": "reuse", "artifact": "ab" * 32}),
+            plan_text(core={"state": "reuse", "artifact": "sha256:" + "AB" * 32}),
         ):
             with self.subTest(text=text), self.assertRaises(images.ImageError):
                 images.plan_lines(text)
@@ -284,7 +263,7 @@ class MainTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("release asset", err)
 
-    def test_tags_and_plan_and_layouts_and_stage(self) -> None:
+    def test_tags_and_plan_and_layouts_and_repositories(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "lock.json").write_text(json.dumps(LOCK), encoding="utf-8")
@@ -300,8 +279,8 @@ class MainTests(unittest.TestCase):
             name = make_layout(outdir, "debian")
             code, out, _ = self.run_main("layouts", str(outdir))
             self.assertEqual(out, f"debian sha256:{HEX} {name} {HEX}.intoto.jsonl\n")
-            code, out, _ = self.run_main("stage", str(outdir), str(root / "stage"))
-            self.assertEqual(out, f"debian {root / 'stage' / 'debian'}\n")
+            code, out, _ = self.run_main("repositories", str(outdir))
+            self.assertEqual((code, out), (0, "debian debian\n"))
             self.assertEqual(self.run_main("plan", str(root / "none.json"))[0], 1)
 
 

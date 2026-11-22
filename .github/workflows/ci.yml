@@ -1,5 +1,7 @@
-# Every push to main and every pull request: the static checks, then a build and test of every image
-# from the lock's own snapshot. Nothing is published, and no job here holds a write token.
+# Every push to main and every pull request: the static checks, and beside them a build and test of
+# every image from the lock's own snapshot. The two jobs do not depend on each other, so they run side
+# by side and a failure of either shows at once. Nothing is published, and no job here holds a write
+# token.
 #
 # GitHub-hosted runners only. Pull requests from forks run after a maintainer approves them, with the
 # read-only token this file asks for (DESIGN.md, section 6).
@@ -62,7 +64,6 @@ jobs:
 
   images:
     name: build and test every image
-    needs: static
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     steps:
@@ -110,15 +111,17 @@ jobs:
       - name: Verify every image against its records, every required check passing
         run: |
           set -eu
+          . scripts/jobs.sh
+          mkdir work/jobs
+          jobs_begin work/jobs
           python3 scripts/images.py layouts work/out > work/layouts.txt
           for core in work/out/core-*.tar.gz; do
-            echo "== core"
-            scripts/factory verify "$core" --require-checks --lock lock.json --definition factory.toml
+            job core scripts/factory verify "$core" --require-checks --lock lock.json --definition factory.toml
           done
           while read -r image _digest layout _records; do
-            echo "== $image"
-            scripts/factory verify "work/out/$layout" --require-checks --lock lock.json --definition factory.toml < /dev/null
+            job "$image" scripts/factory verify "work/out/$layout" --require-checks --lock lock.json --definition factory.toml
           done < work/layouts.txt
+          jobs_settle
 
       - name: What was built
         if: always()

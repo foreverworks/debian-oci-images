@@ -1,38 +1,41 @@
 #!/bin/sh
 # The static checks CI runs first. Run it from anywhere; it works in the repository root.
-# It stops at the first failing check and names it.
+# The checks do not depend on each other, so they run side by side. It prints each one's output in a
+# fixed order when all have finished, marks the ones that failed, and exits 1 if there was one.
 #
 #   CHECK_OFFLINE=1   check the lock without the network (lock check --offline)
 set -eu
 
 cd -- "$(dirname -- "$0")/.."
+here=scripts
+# shellcheck source=scripts/jobs.sh
+. "$here/jobs.sh"
 
-step() {
-    name=$1
-    shift
-    echo "check: $name" >&2
-    if ! "$@"; then
-        echo "check: FAILED: $name" >&2
-        exit 1
-    fi
-}
+logs=$(mktemp -d)
+trap 'rm -rf "$logs"' EXIT
+jobs_begin "$logs"
 
 sh_scripts=$(grep -l '^#!/bin/sh' scripts/* 2>/dev/null || true)
 # shellcheck disable=SC2086  # the names are repository file names without spaces
-step shellcheck shellcheck -s sh $sh_scripts
-step "mypy --strict" python3 -m mypy --strict scripts tests
-step unittest env PYTHONPATH=scripts python3 -m unittest discover -s tests
-step policy python3 scripts/policy.py
+job shellcheck shellcheck -s sh $sh_scripts
+job mypy python3 -m mypy --strict scripts tests
+job unittest env PYTHONPATH=scripts python3 -m unittest discover -s tests
+job policy python3 scripts/policy.py
 
 if command -v actionlint >/dev/null 2>&1; then
-    step actionlint actionlint
+    job actionlint actionlint
 else
     echo "check: actionlint is not on PATH, skipped" >&2
 fi
 
 if [ "${CHECK_OFFLINE:-0}" = 1 ]; then
-    step "lock check (offline)" scripts/factory lock check --offline
+    job lock-check scripts/factory lock check --offline
 else
-    step "lock check" scripts/factory lock check
+    job lock-check scripts/factory lock check
+fi
+
+if ! jobs_settle; then
+    echo "check: FAILED (the checks marked FAILED above)" >&2
+    exit 1
 fi
 echo "check: all passed" >&2

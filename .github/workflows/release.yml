@@ -6,12 +6,14 @@
 #   build    plans the whole chain at the lock's snapshot, builds, tests and verifies every image,
 #            with a read-only token, and hands the output on as a workflow artifact;
 #   publish  pushes debian to ghcr.io/foreverworks/debian and node-* to ghcr.io/foreverworks/node with
-#            their records, verifies every pushed image with all of its required checks, then puts the
-#            core tarball on this tag's GitHub release and verifies it there, signs each image digest
+#            their records (one publish --image per repository), verifies every pushed image with all
+#            of its required checks, then puts the core tarball on this tag's GitHub release and verifies it there, signs each image digest
 #            keyless with Sigstore and only then moves the tags (scripts/release).
 #
-# The build is the whole chain on purpose: the factory cannot yet check a child's ancestry against a
-# parent it reuses from a registry (DESIGN.md, section 8).
+# The build is the whole chain on purpose, whatever the registry holds: a release is one set of images
+# at one snapshot, and an image reused from an earlier release would carry a tag that names a snapshot
+# it was not built at. The factory could now reuse one (`test --parents` reads a parent from a
+# registry); this repository chooses not to (DESIGN.md, section 8).
 name: release
 
 on:
@@ -82,13 +84,17 @@ jobs:
       - name: Verify every artifact against its records, every required check passing
         run: |
           set -eu
+          . scripts/jobs.sh
+          mkdir work/jobs
+          jobs_begin work/jobs
           for core in work/out/core-*.tar.gz; do
-            scripts/factory verify "$core" --require-checks --lock lock.json --definition factory.toml
+            job core scripts/factory verify "$core" --require-checks --lock lock.json --definition factory.toml
           done
           python3 scripts/images.py layouts work/out > work/layouts.txt
-          while read -r _image _digest layout _records; do
-            scripts/factory verify "work/out/$layout" --require-checks --lock lock.json --definition factory.toml < /dev/null
+          while read -r image _digest layout _records; do
+            job "$image" scripts/factory verify "work/out/$layout" --require-checks --lock lock.json --definition factory.toml
           done < work/layouts.txt
+          jobs_settle
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

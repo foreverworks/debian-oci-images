@@ -5,17 +5,16 @@ Usage:
   images.py repository IMAGE
   images.py tags IMAGE --lock lock.json --definition factory.toml
   images.py layouts OUT
-  images.py stage OUT STAGE
+  images.py repositories OUT
   images.py plan PLAN
 
-`stage` is INTERIM. It exists because factory `publish` pushes every layout of an output directory to
-each target, with no way to select images (factory gap 1). It goes away when `publish` can select
-images: the release then publishes debian and node-* to their repositories with the factory itself.
+`repositories` says which images of OUT go to which repository, for one `publish --image ... --to` per
+repository. The factory's `{image}` template cannot say it: it names each image's own repository, and
+the node-<N> images share one.
 """
 
 import argparse
 import json
-import os
 import re
 import sys
 import tomllib
@@ -30,6 +29,8 @@ DEBIAN_MAJOR = {"trixie": "13"}
 
 NODE_IMAGE_RE = re.compile(r"node-([0-9]+)")
 HEX_RE = re.compile(r"[0-9a-f]+")
+ARTIFACT_RE = re.compile(r"sha256:[0-9a-f]{64}")
+"""How plan.json names an artifact since factory 0.6.3, always."""
 PLAN_STATES = ("build", "reuse", "wait")
 
 
@@ -194,33 +195,12 @@ def read_layouts(out: Path) -> list[Layout]:
     return layouts
 
 
-def _link_tree(source: Path, target: Path) -> None:
-    for directory, subdirectories, files in os.walk(source):
-        relative = Path(directory).relative_to(source)
-        for name in subdirectories:
-            (target / relative / name).mkdir(parents=True)
-        (target / relative).mkdir(parents=True, exist_ok=True)
-        for name in files:
-            os.link(Path(directory) / name, target / relative / name, follow_symlinks=False)
-
-
-def stage(out: Path, stage_dir: Path) -> list[tuple[str, Path]]:
-    """One directory per repository under stage_dir, made of hard links to the layouts of OUT."""
-    if stage_dir.exists() and (not stage_dir.is_dir() or any(stage_dir.iterdir())):
-        raise ImageError(f"{stage_dir} exists and is not empty")
-    layouts = read_layouts(out)
-    placed = [(repository_of(layout.image), layout) for layout in layouts]
-    stage_dir.mkdir(parents=True, exist_ok=True)
-    repositories: dict[str, Path] = {}
-    for repository, layout in placed:
-        directory = repositories.setdefault(repository, stage_dir / repository)
-        directory.mkdir(exist_ok=True)
-        _link_tree(out / layout.directory, directory / layout.directory)
-        os.link(out / layout.records, directory / layout.records)
-    for directory in repositories.values():
-        if (out / "plan.json").is_file():
-            os.link(out / "plan.json", directory / "plan.json")
-    return sorted(repositories.items())
+def repositories(layouts: Sequence[Layout]) -> list[tuple[str, list[str]]]:
+    """(repository, images) for every repository the layouts go to, repositories sorted, images in layout order."""
+    grouped: dict[str, list[str]] = {}
+    for layout in layouts:
+        grouped.setdefault(repository_of(layout.image), []).append(layout.image)
+    return sorted(grouped.items())
 
 
 def plan_lines(plan_text: str) -> list[str]:
@@ -245,6 +225,8 @@ def plan_lines(plan_text: str) -> list[str]:
         artifact = body.get("artifact") if isinstance(body, dict) else None
         if not isinstance(artifact, str) or not artifact:
             raise ImageError(f"image {name} is {state} but the plan names no artifact")
+        if ARTIFACT_RE.fullmatch(artifact) is None:
+            raise ImageError(f"image {name} has artifact {artifact}, not sha256:<64 hex>")
         lines.append(f"{name} {state} {artifact}")
     lines.append(f"changed={'true' if changed else 'false'}")
     return lines
@@ -259,9 +241,7 @@ def _build_parser() -> argparse.ArgumentParser:
     tags.add_argument("--lock", type=Path, default=Path("lock.json"))
     tags.add_argument("--definition", type=Path, default=Path("factory.toml"))
     commands.add_parser("layouts").add_argument("out", type=Path)
-    staging = commands.add_parser("stage")
-    staging.add_argument("out", type=Path)
-    staging.add_argument("stage", type=Path)
+    commands.add_parser("repositories").add_argument("out", type=Path)
     commands.add_parser("plan").add_argument("plan", type=Path)
     return parser
 
@@ -278,8 +258,10 @@ def run(arguments: argparse.Namespace) -> list[str]:
             f"{layout.image} {layout.manifest_digest} {layout.directory} {layout.records}"
             for layout in read_layouts(arguments.out)
         ]
-    if command == "stage":
-        return [f"{name} {directory}" for name, directory in stage(arguments.out, arguments.stage)]
+    if command == "repositories":
+        return [
+            " ".join([repository, *names]) for repository, names in repositories(read_layouts(arguments.out))
+        ]
     try:
         text = arguments.plan.read_text(encoding="utf-8")
     except OSError as error:

@@ -10,6 +10,9 @@
 # where the repositories live, ghcr.io/foreverworks in the release workflow. Nothing moves a tag until
 # every image is published and has verified, so a failure leaves the tags where they were.
 #
+# The repositories and the images are independent of each other, so publishing, verifying and signing
+# each run side by side. Only the tags move one at a time, as above.
+#
 # Environment:
 #   SIGN      keyless: cosign signs each image digest with the workflow's identity; none: no signature
 #             (local runs against a test registry). Default keyless.
@@ -22,6 +25,8 @@ set -eu
 out=$1
 registry=$2
 here=$(dirname "$0")
+# shellcheck source=scripts/jobs.sh
+. "$here/jobs.sh"
 lock=${LOCK:-lock.json}
 definition=${DEFINITION:-factory.toml}
 sign=${SIGN:-keyless}
@@ -33,26 +38,41 @@ oras_flags=""
 [ "${PLAIN_HTTP:-0}" != 1 ] || oras_flags="--plain-http"
 
 [ -f "$out/plan.json" ] || { echo "release: $out/plan.json is missing: run build and test first" >&2; exit 1; }
-# Beside OUT, on its file system: the stage below is made of hard links into OUT.
-work=$(mktemp -d "$(dirname "$out")/release.XXXXXX")
+work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+mkdir "$work/jobs"
 python3 "$here/images.py" layouts "$out" > "$work/layouts"
 [ -s "$work/layouts" ] || { echo "release: $out holds no OCI images" >&2; exit 1; }
+python3 "$here/images.py" repositories "$out" > "$work/repositories"
 
-# INTERIM (factory gap 1, DESIGN.md section 8): the factory pushes every image of a directory to each
-# oci:// target, so each repository gets a directory of its own, made of hard links. Once the factory
-# can publish selected images, this becomes one `publish --image` per repository.
-python3 "$here/images.py" stage "$out" "$work/stage" > "$work/repositories"
-while read -r repository dir; do
-  "$here/factory" publish "$dir" --to "oci://$registry/$repository" < /dev/null
+# One `publish --image ... --to` per repository: debian goes to .../debian and every node-<N> to .../node,
+# which the factory's `{image}` template cannot say (it names one repository per image).
+publish_repository() {
+  repository=$1
+  shift
+  selected=""
+  for image in "$@"; do selected="$selected --image $image"; done
+  # shellcheck disable=SC2086 # one --image NAME pair per image; the names have no spaces
+  "$here/factory" publish "$out" $selected --to "oci://$registry/$repository"
+}
+jobs_begin "$work/jobs"
+while read -r repository names; do
+  # shellcheck disable=SC2086 # one argument per image name
+  job "publish-$repository" publish_repository "$repository" $names
 done < "$work/repositories"
+jobs_settle || { echo "release: publishing failed, no tag moved" >&2; exit 1; }
 
 # Every image as the registry now holds it must verify against its records, with every check the
 # definition requires passing, before anything is signed or tagged.
+verify_image() {
+  "$here/factory" verify "oci://$registry/$1@$2" --pull --require-checks --lock "$lock" --definition "$definition"
+}
+jobs_begin "$work/jobs"
 while read -r image digest _layout _records; do
   repository=$(python3 "$here/images.py" repository "$image" < /dev/null)
-  "$here/factory" verify "oci://$registry/$repository@$digest" --pull --require-checks --lock "$lock" --definition "$definition" < /dev/null
+  job "verify-$image" verify_image "$repository" "$digest"
 done < "$work/layouts"
+jobs_settle || { echo "release: verification failed, no tag moved" >&2; exit 1; }
 
 # The core tarball goes to the GitHub release only once every image has verified, and is verified again
 # as the release now holds it.
@@ -66,10 +86,12 @@ if [ -n "${RELEASE:-}" ]; then
 fi
 
 if [ "$sign" = keyless ]; then
+  jobs_begin "$work/jobs"
   while read -r image digest _layout _records; do
     repository=$(python3 "$here/images.py" repository "$image" < /dev/null)
-    cosign sign --yes "$registry/$repository@$digest" < /dev/null
+    job "sign-$image" cosign sign --yes "$registry/$repository@$digest"
   done < "$work/layouts"
+  jobs_settle || { echo "release: signing failed, no tag moved" >&2; exit 1; }
 fi
 
 while read -r image digest _layout _records; do

@@ -104,17 +104,17 @@ cosign verify ghcr.io/foreverworks/node@sha256:<digest> \
 ### 2. The records
 
 The records are checked by the factory itself. Take its `.pyz` from the
-[v0.6.2 release](https://github.com/foreverworks/debian-image-factory/releases/tag/v0.6.2), check its
+[v0.6.3 release](https://github.com/foreverworks/debian-image-factory/releases/tag/v0.6.3), check its
 sha256 against `lock.json` in this repository and its Sigstore bundle, then, from a checkout of
 this repository at the release tag:
 
 ```sh
-sha256sum debian-image-factory-0.6.2.pyz   # f718b927fac4a3159cf75a62e3ce657a9c87e851fc5097b553198b360534ce00
-cosign verify-blob debian-image-factory-0.6.2.pyz \
-  --bundle debian-image-factory-0.6.2.pyz.sigstore.json \
+sha256sum debian-image-factory-0.6.3.pyz   # a2dab6168fd098e19c7b3aba6b3029c25f9e770484b47b1fcc1158d2e5965c62
+cosign verify-blob debian-image-factory-0.6.3.pyz \
+  --bundle debian-image-factory-0.6.3.pyz.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity https://github.com/foreverworks/debian-image-factory/.github/workflows/release.yml@refs/tags/v0.6.2
-python3 debian-image-factory-0.6.2.pyz verify \
+  --certificate-identity https://github.com/foreverworks/debian-image-factory/.github/workflows/release.yml@refs/tags/v0.6.3
+python3 debian-image-factory-0.6.3.pyz verify \
   oci://ghcr.io/foreverworks/node@sha256:<digest> \
   --pull --require-checks --lock lock.json --definition factory.toml
 ```
@@ -145,7 +145,7 @@ envelopes of in-toto Statements; `oras pull` fetches them if you want to read th
 
 Two limits are worth knowing:
 
-- **The records are unsigned for now.** The factory release these images use (v0.6.2) writes records
+- **The records are unsigned for now.** The factory release these images use (v0.6.3) writes records
   without a signature, and the registry's authentication is what protects them. What is signed today is
   the image manifest digest. Signed records need a later factory release
   ([DESIGN.md, section 7](DESIGN.md#7-signing-and-records)).
@@ -157,12 +157,13 @@ Two limits are worth knowing:
 SLSA Build L1 means the provenance exists and says what the build used. Build L2 needs a build platform
 that generates and signs the provenance on its own, and L3 needs a hardened, isolated platform. The
 factory's own wording is in its
-[DESIGN, section 8.3](https://github.com/foreverworks/debian-image-factory/blob/v0.6.2/DESIGN.md).
+[DESIGN, section 8.3](https://github.com/foreverworks/debian-image-factory/blob/v0.6.3/DESIGN.md).
 
 ## How the images stay current
 
 - **Nightly.** A scheduled workflow plans at the newest Debian snapshot and builds only the images
-  whose inputs changed. A quiet night builds nothing. Nightly builds go to a cache and are never pushed
+  whose inputs changed, and a child built alone is tested against its parent as the cache holds it.
+  A quiet night builds nothing. Nightly builds go to a cache and are never pushed
   to `ghcr.io`: they exist to show that the next release would build and pass its checks.
 - **Renovate** opens a pull request for each new Node.js patch or minor version inside a supported line,
   and for a new factory release. It never moves a line to the next major version.
@@ -192,7 +193,7 @@ scripts/factory verify out/node-26-trixie-amd64-*.oci --require-checks --lock lo
 ```
 
 `scripts/factory` refuses any factory bytes other than the ones in `lock.json`, and passes everything
-else to it. The factory's [command line reference](https://github.com/foreverworks/debian-image-factory/blob/v0.6.2/DESIGN.md)
+else to it. The factory's [command line reference](https://github.com/foreverworks/debian-image-factory/blob/v0.6.3/DESIGN.md)
 (section 9.1) lists every option. The factory builds everything from this repository's definition, and
 nothing here runs a package script on your machine outside the builder container.
 

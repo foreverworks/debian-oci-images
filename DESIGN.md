@@ -3,7 +3,7 @@
 This document is for maintainers and reviewers. It says what the repository holds, why the images are
 what they are, and what is deliberately temporary. For what the images give you and how to check them,
 see the [README](README.md). The factory that does the building is
-[debian-image-factory](https://github.com/foreverworks/debian-image-factory), pinned here at v0.6.2; its
+[debian-image-factory](https://github.com/foreverworks/debian-image-factory), pinned here at v0.6.3; its
 sections are cited as "factory DESIGN n".
 
 ## 1. Purpose and non-goals
@@ -115,15 +115,15 @@ A Renovate change is not a release. It builds and tests in CI and waits for a pe
 `lock.json` is the single source of every version and checksum (factory DESIGN 6.1). `factory.toml`
 holds no versions, so a version has one home.
 
-**The factory itself.** The `debian-image-factory` entry names the release (0.6.2), the URL of its `.pyz`
-and its sha256 `f718b927...ce00`. `scripts/factory install` downloads that file and refuses any other
+**The factory itself.** The `debian-image-factory` entry names the release (0.6.3), the URL of its `.pyz`
+and its sha256 `a2dab616...5c62`. `scripts/factory install` downloads that file and refuses any other
 bytes. The `.pyz` is the only code that runs the build, so its checksum is the root of the chain.
 
 **The builder.** The factory builds in a container image. `builder.ref` is one line, a reference with the
 tag for readers and the digest for the machine:
 
 ```
-ghcr.io/foreverworks/debian-image-factory-builder:v0.6.2@sha256:93616e8c...a1a23
+ghcr.io/foreverworks/debian-image-factory-builder:v0.6.3@sha256:c9734c73...41b3
 ```
 
 `scripts/policy.py` checks that its tag equals the factory version in the lock, so one pull request moves
@@ -136,10 +136,10 @@ workflow. Anyone can check them with the identity
 and the issuer `https://token.actions.githubusercontent.com`. The builder reference was verified this way
 with cosign 3.1.4 when it was pinned.
 
-**Why the factory's GitHub Action is not used.** In v0.6.2 the Action builds its builder from the
+**Why the factory's GitHub Action is not used.** In v0.6.3 the Action builds its builder from the
 factory's own checkout and has no input to name another one. This repository wants the published builder,
 by digest, so it cannot use the Action: `scripts/factory` calls the `.pyz` directly. When the `.pyz` pins
-its builder (section 8, gap 4), the Action can be used, and `builder.ref` and `scripts/factory` go away.
+its builder (section 8, gap 2), the Action can be used, and `builder.ref` and `scripts/factory` go away.
 
 ## 5. Repositories and tags
 
@@ -160,7 +160,7 @@ its builder (section 8, gap 4), the Action can be used, and `builder.ref` and `s
 **Who moves them, and when.** Only `release.yml`, and only after the image's required checks have all
 passed, its records verify and its digest is signed (section 6). Nothing else, a person included, moves a
 friendly tag. The identity tag is not friendly: it names one set of inputs. While the release rebuilds the
-whole chain (section 8, gap 2), a release that rebuilds an image whose inputs did not change pushes a new
+whole chain (section 6, release.yml), a release that rebuilds an image whose inputs did not change pushes a new
 digest under the same identity tag: the bytes differ only in the commit annotation (factory DESIGN 5.3).
 
 **Why `latest` and `lts` are both on the newest LTS.** Users who pick no tag get the newest supported
@@ -186,7 +186,10 @@ On every push to `main` and every pull request:
 
 1. static checks: `scripts/check` (section 10);
 2. build and test every image from the lock's snapshot, with nothing published: `plan` with no
-   `--against`, `fetch`, `build`, `test`, then `verify --require-checks` on every layout.
+   `--against`, `fetch`, `build`, `test`, then `verify --require-checks` on every layout, one `verify`
+   per image, side by side.
+
+The two jobs do not depend on each other, so they run side by side.
 
 CI shows that the definition, the lock and the scripts build the images and that every check passes. It
 holds a read-only token.
@@ -195,7 +198,9 @@ holds a read-only token.
 
 On a schedule and on demand. It plans at the **newest** snapshot against a target that persists in the
 Actions cache: a local zot registry on `127.0.0.1` for the OCI images and a `dir://` directory for
-`core`. It builds and tests what changed, "publishes" only that into the cache, and prunes the cache.
+`core`. It builds and tests what changed, "publishes" only that into the cache, and prunes the cache. A child
+that builds alone (a Node.js bump, with `debian` reused) reads its parent from the cache for both `build`
+and `test`, so its `ancestry` check runs and the child passes and is kept as good.
 
 - A quiet night (no relevant Debian upload, no new Node.js release) gives `changed=false` and builds
   nothing, at the cost of a few index downloads.
@@ -213,12 +218,20 @@ On a push of a tag `v*`, which only maintainers create; the tag must be `vMAJOR.
 1. **build**: read-only token. Builds and tests everything and uploads the output as an artifact.
 2. **publish**: `packages: write`, `contents: write` and `id-token: write`, in the environment `release`.
    It downloads the artifact and then:
-   - publishes `debian` to `ghcr.io/foreverworks/debian`, the `node-*` images to
-     `ghcr.io/foreverworks/node`, and `core` to the tag's GitHub release (`scripts/images.py stage`,
-     section 8);
-   - runs `verify --require-checks` on each pushed image, from the registry, with `--pull`;
-   - signs each image manifest digest with `cosign sign`, keyless;
-   - and only then moves the friendly tags, with `oras`.
+   - publishes `debian` to `ghcr.io/foreverworks/debian` and the `node-*` images to
+     `ghcr.io/foreverworks/node`, one `publish --image ... --to` per repository, run side by side
+     (`scripts/images.py repositories` says which images go to which repository), and `core` to the
+     tag's GitHub release;
+   - runs `verify --require-checks` on each pushed image, from the registry, with `--pull`, one
+     image per job, side by side;
+   - signs each image manifest digest with `cosign sign`, keyless, side by side;
+   - and only then moves the friendly tags, with `oras`, one image at a time.
+
+**Why the release builds the whole chain.** The factory can reuse an image from a registry and check
+its child against it (`plan --against`, `test --parents`), as the nightly does. The release does not:
+it is one set of images at one snapshot, and an image reused from an earlier release would be tagged
+`13-<snapshot>` for a snapshot it was not built at. The first release also has nothing to reuse.
+Reusing images in a release is a decision for the maintainers (section 9).
 
 **Why two jobs.** The build runs package scripts as root in a privileged container. A job that does so
 must never hold a token that can write packages or releases, or sign as this repository: a hostile
@@ -256,7 +269,7 @@ Nothing is published to any registry before the owner approves the first release
 GitHub OIDC identity, `cosign sign`. That is how the factory signs its own builder image.
 The verification command, with the exact identity regular expression, is in the README.
 
-**Not signed today:** the records (provenance, SBOM, test results). Factory v0.6.2 accepts only
+**Not signed today:** the records (provenance, SBOM, test results). Factory v0.6.3 accepts only
 `publish --sign none`, so they are DSSE envelopes with an empty signature list, attached to the image
 as OCI referrers and, for `core`, in `<sha256>.intoto.jsonl` beside the asset. Their protection is the
 registry's authentication and, by digest, the fact that the signed image names the same bits the records
@@ -272,48 +285,48 @@ beside it. It could, and that statement would carry whatever level GitHub claims
 
 ## 8. Waiting on the factory
 
-Four gaps, each with its effect here, the interim, and the factory change that removes it.
+Two gaps remain, each with its effect here, the interim, and the factory change that removes it.
 
-**1. `publish` cannot select images.** It pushes every layout in an output directory to each `oci://`
-target. There is no way to send `debian` and the `node-*` images to different repositories from one build.
-- *Interim:* `scripts/images.py stage` makes one directory per repository, of hard links to the documented
-  artifact files (the layout directory and its `<manifest digest>.intoto.jsonl`), and the release publishes
-  each directory to its repository. Marked as interim in the code.
-- *Removal:* a factory release that lets `publish` select images, planned as v0.6.3. Then `stage` is
-  deleted.
-
-**2. `test` cannot check `ancestry` for a parent reused from a registry.** `plan.json` writes the artifact
-digest as bare hex, `test` parses `sha256:<hex>`, and an OCI parent outside the output has unknown
-layers.
-- *Interim:* the release builds the whole chain from the lock every time, so parents are always in the
-  output and `ancestry` runs. The nightly accepts that a child built alone, with its parent reused from
-  the cache, stays a candidate: its other checks run, and it is not promoted by a night.
-- *Removal:* the same planned v0.6.3.
-
-**3. Records are unsigned.**
+**1. Records are unsigned.**
 - *Interim:* the image digest is signed (section 7).
 - *Removal:* `publish --sign keyless`, planned in factory DESIGN 8.3. Later factory work.
 
-**4. The `.pyz` does not pin its builder, and the Action has no builder input** (factory DESIGN 5.4).
+**2. The `.pyz` does not pin its builder, and the Action has no builder input** (factory DESIGN 5.4).
 - *Interim:* `builder.ref` and `scripts/factory`, with the policy check that keeps the tag equal to the
   factory version.
 - *Removal:* the `.pyz` carries the digest of its own builder, and the Action uses it. Later factory work.
   Then this repository uses the Action and drops `builder.ref` and `scripts/factory`.
 
-The factory's own repository tracks these. A release that fixes one is adopted by moving the lock and
-deleting the interim code in the same pull request, never by leaving both.
+**Closed in v0.6.3.** Two gaps of the earlier releases are gone, and so is the glue they needed:
+
+- `publish` could not select images, so `scripts/images.py stage` linked one directory of the build per
+  repository. `publish --image NAME` replaces it: the release runs one `publish` per repository. The
+  factory's `{image}` template does not fit here (it names a repository per image, and the `node-*`
+  images share `node`), so `scripts/images.py repositories` still says which images go where, and the
+  factory does the rest.
+- `test` could not check `ancestry` for a parent reused from a registry, so every release rebuilt the
+  whole chain and a nightly child stayed a candidate. `test --parents` reads the parent's manifest from
+  the registry, and the nightly passes it. The release still builds the whole chain, for the reason in
+  section 6, and no longer for this one.
+
+The factory's own repository tracks what is left. A release that fixes one is adopted by moving the lock
+and deleting the interim code in the same pull request, never by leaving both.
 
 ## 9. Later work
 
-- **arm64.** The factory v0.6.2 supports amd64 only, and architecture is part of every identity, so other
+- **arm64.** The factory v0.6.3 supports amd64 only, and architecture is part of every identity, so other
   architectures can follow. This needs the factory first; then `architectures` in `factory.toml` grows by
   one and the nightly and the release build two sets.
 - **Nightly planning against `ghcr.io`.** Today the nightly plans against a cache, because nothing exists
   on the registry. Once the first release exists, the nightly can ask `ghcr.io` which identities are
-  already published and build only what a release would add, as the factory's design intends.
+  already published and build only what a release would add, as the factory's design intends. The
+  `{image}` template does not name the shared `node` repository, so that is one `--against` per
+  repository.
+- **Releases that reuse images.** A release could plan against `ghcr.io` and build only what changed
+  (section 6 says why it does not).
 - **New LTS lines.** Node.js 27 is scheduled to become LTS on 2027-10-20 (nodejs/release schedule). It gets a block in `factory.toml`, an entry
   in the lock and a row in the tables, as a reviewed change.
-- **Signed records**, when the factory supports them (section 8, gap 3).
+- **Signed records**, when the factory supports them (section 8, gap 1).
 - **Checksums on Renovate branches.** The input-lock Renovate preset expects an Action that commits the
   new checksum of a bumped entry to Renovate's branch. This repository has none yet, so a Node.js or
   factory bump arrives with the old sha256 and CI's `fetch` fails, safely, until a maintainer runs
@@ -323,7 +336,8 @@ deleting the interim code in the same pull request, never by leaving both.
 ## 10. Checks this repository adds
 
 The factory checks the images. These checks keep the repository itself honest. `scripts/check` runs all of
-them and is what CI runs first:
+them, side by side (`scripts/jobs.sh`), and prints each one's output in a fixed order. It is what CI runs
+in the static job:
 
 - **shellcheck** on every shell script;
 - **`mypy --strict`** on every Python script. The scripts use only the standard library, are fully typed
@@ -340,3 +354,8 @@ them and is what CI runs first:
   lock and the definition agree.
 
 Run `scripts/check` before every push. It needs no network except for the lock check.
+
+**Side by side.** Steps that do not depend on each other run in parallel: the checks above, the
+`verify` of each image in CI and in the release, and the publish, verify and sign steps of
+`scripts/release`. `scripts/jobs.sh` holds the one helper: start a job per item, wait for all, print each log in
+the order started, fail if any failed. Moving the tags stays serial, on purpose (section 6).

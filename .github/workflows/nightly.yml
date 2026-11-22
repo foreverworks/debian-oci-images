@@ -90,11 +90,11 @@ jobs:
           scripts/factory build work/plan.json --out work/out \
             --parents "oci://$REGISTRY/images" --parents "dir://$PWD/.nightly/core"
 
-      - name: Test what was built
+      - name: Test what was built, reading reused parents from the target
         if: steps.plan.outputs.changed == 'true'
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: scripts/factory test work/out --url "$RUN_URL"
+        run: scripts/factory test work/out --url "$RUN_URL" --parents "oci://$REGISTRY/images"
 
       # One local repository holds every OCI image: this target is a cache for planning, never a
       # publication, so the per-repository split of the release does not apply.
