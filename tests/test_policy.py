@@ -40,7 +40,7 @@ kind = "oci"
 kind = "oci"
 """
 
-FACTORY_ENTRY = {"version": "0.6.2", "url": "https://example.com/{version}", "sha256": "a" * 64}
+FACTORY_ENTRY = {"version": "0.6.3", "url": "https://example.com/{version}", "sha256": "a" * 64}
 
 
 def lock(**node: object) -> dict[str, object]:
@@ -137,18 +137,18 @@ class WritePermissionTests(unittest.TestCase):
                 self.assertEqual(len(policy.check_write_permissions("release.yml", text)), 1)
 
 class BuilderRefTests(unittest.TestCase):
-    REF = "ghcr.io/example/builder:v0.6.2@sha256:" + "c" * 64
+    REF = "ghcr.io/example/builder:v0.6.3@sha256:" + "c" * 64
 
     def test_good(self) -> None:
         self.assertEqual(policy.check_builder_ref(self.REF + "\n", lock()), [])
 
     def test_tag_mismatch(self) -> None:
-        problems = policy.check_builder_ref(self.REF.replace("v0.6.2", "v0.6.1"), lock())
+        problems = policy.check_builder_ref(self.REF.replace("v0.6.3", "v0.6.1"), lock())
         self.assertEqual(len(problems), 1)
-        self.assertIn("v0.6.2", problems[0])
+        self.assertIn("v0.6.3", problems[0])
 
     def test_no_digest(self) -> None:
-        self.assertEqual(len(policy.check_builder_ref("ghcr.io/example/builder:v0.6.2", lock())), 1)
+        self.assertEqual(len(policy.check_builder_ref("ghcr.io/example/builder:v0.6.3", lock())), 1)
         self.assertEqual(len(policy.check_builder_ref(self.REF.replace("sha256", "sha512"), lock())), 1)
         self.assertEqual(len(policy.check_builder_ref(self.REF[:-1], lock())), 1)
 
@@ -197,7 +197,7 @@ class RepositoryTests(unittest.TestCase):
         (root / ".github" / "workflows" / "ci.yml").write_text(workflow, encoding="utf-8")
         (root / "lock.json").write_text(json.dumps(lock()), encoding="utf-8")
         (root / "factory.toml").write_text(DEFINITION, encoding="utf-8")
-        (root / "builder.ref").write_text("ghcr.io/example/builder:v0.6.2@sha256:" + "c" * 64 + "\n", encoding="utf-8")
+        (root / "builder.ref").write_text("ghcr.io/example/builder:v0.6.3@sha256:" + "c" * 64 + "\n", encoding="utf-8")
 
     def test_good_repository(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

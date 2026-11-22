@@ -6,9 +6,9 @@
       "depName": "foreverworks/debian-image-factory",
       "description": "The factory release that builds these images. scripts/factory downloads this .pyz and refuses any other bytes.",
       "extractVersion": "^v(?<version>.+)$",
-      "sha256": "f718b927fac4a3159cf75a62e3ce657a9c87e851fc5097b553198b360534ce00",
+      "sha256": "a2dab6168fd098e19c7b3aba6b3029c25f9e770484b47b1fcc1158d2e5965c62",
       "url": "https://github.com/foreverworks/debian-image-factory/releases/download/v{version}/debian-image-factory-{version}.pyz",
-      "version": "0.6.2"
+      "version": "0.6.3"
     },
     "node-22": {
       "datasource": "node-version",
