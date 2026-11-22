@@ -1,0 +1,38 @@
+#!/bin/sh
+# The static checks CI runs first. Run it from anywhere; it works in the repository root.
+# It stops at the first failing check and names it.
+#
+#   CHECK_OFFLINE=1   check the lock without the network (lock check --offline)
+set -eu
+
+cd -- "$(dirname -- "$0")/.."
+
+step() {
+    name=$1
+    shift
+    echo "check: $name" >&2
+    if ! "$@"; then
+        echo "check: FAILED: $name" >&2
+        exit 1
+    fi
+}
+
+sh_scripts=$(grep -l '^#!/bin/sh' scripts/* 2>/dev/null || true)
+# shellcheck disable=SC2086  # the names are repository file names without spaces
+step shellcheck shellcheck -s sh $sh_scripts
+step "mypy --strict" python3 -m mypy --strict scripts tests
+step unittest env PYTHONPATH=scripts python3 -m unittest discover -s tests
+step policy python3 scripts/policy.py
+
+if command -v actionlint >/dev/null 2>&1; then
+    step actionlint actionlint
+else
+    echo "check: actionlint is not on PATH, skipped" >&2
+fi
+
+if [ "${CHECK_OFFLINE:-0}" = 1 ]; then
+    step "lock check (offline)" scripts/factory lock check --offline
+else
+    step "lock check" scripts/factory lock check
+fi
+echo "check: all passed" >&2

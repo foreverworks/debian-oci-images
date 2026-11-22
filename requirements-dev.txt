@@ -1,0 +1,20 @@
+# Pinned with hashes: pip install --require-hashes -r requirements-dev.txt
+# Wheels only, for CPython 3.13 and 3.14 on linux x86_64 (glibc). Hashes are PyPI's, one per wheel.
+# To regenerate after changing requirements-dev.in, resolve it again (pip-compile or uv pip compile
+# with --generate-hashes), then keep the wheels for the interpreters above; or read each
+# pinned version's files from https://pypi.org/pypi/<name>/<version>/json.
+ast-serialize==0.13.1 \
+    --hash=sha256:9f99786e0d62082a5b121b3437f3167562133711df22128de1e9886f57f0b226
+librt==0.17.0 ; platform_python_implementation != 'PyPy' \
+    --hash=sha256:de7dd4d3ec15cf15299cd30839773f58d6dc109a057cb2c797bb11fba478721b \
+    --hash=sha256:e3dad4792d84979f5f1aaa46d22cd062b15f4551bcadc7d2b695d42aac971bf5
+mypy==2.4.1 \
+    --hash=sha256:1784648d6ec8c2b5465e3f26241b845a0b3cb4e56c993c64abe16989e7698999 \
+    --hash=sha256:1fb70621535c22fd4b1a0450d37ed1d6c5eb39656a1cebfb189084c12de54ba7 \
+    --hash=sha256:beb254fec368c4e7f7f82a5f310c6470b893ec88a90b66426da971c6826b0453
+mypy-extensions==1.2.0 \
+    --hash=sha256:993e7a20aa5671eb41a7132cf555af30062da99729601601b9a8382b11cae768
+pathspec==1.1.1 \
+    --hash=sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189
+typing-extensions==4.16.0 \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
