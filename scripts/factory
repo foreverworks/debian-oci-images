@@ -1,0 +1,172 @@
+#!/bin/sh
+# Runs the Debian Image Factory release this repository pins.
+#
+#   scripts/factory install          download and verify the factory and its builder image
+#   scripts/factory builder          print the builder image reference, <repository>@sha256:<hex>
+#   scripts/factory pyz              print the path of the verified factory (installing it if needed)
+#   scripts/factory COMMAND [ARGS]   run the factory with these arguments; `build` gets the pinned
+#                                    --builder-image unless the arguments name one
+#
+# Environment:
+#   LOCK            the lock, default lock.json; builder.ref is read from beside it
+#   FACTORY_HOME    where the factory is kept, default .factory
+#   FACTORY_COSIGN  auto (default): check signatures when cosign is installed, say so when it is not
+#                   required: fail without cosign
+#                   off: do not check signatures
+#
+# The sha256 in the lock is always checked. The signatures add proof of who built the files.
+set -eu
+
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+LOCK=${LOCK:-lock.json}
+FACTORY_HOME=${FACTORY_HOME:-.factory}
+FACTORY_COSIGN=${FACTORY_COSIGN:-auto}
+issuer=https://token.actions.githubusercontent.com
+
+die() {
+    echo "factory: $*" >&2
+    exit 1
+}
+
+say() {
+    echo "factory: $*" >&2
+}
+
+# Sets version, url and sha256 from the lock's debian-image-factory entry, and pyz to where it is kept.
+read_pin() {
+    pin=$(python3 "$here/lockpin.py" "$LOCK" debian-image-factory) || exit 1
+    version=$(printf '%s\n' "$pin" | sed -n 1p)
+    url=$(printf '%s\n' "$pin" | sed -n 2p)
+    sha256=$(printf '%s\n' "$pin" | sed -n 3p)
+    pyz="$FACTORY_HOME/$(basename -- "$url")"
+}
+
+# Sets builder_repo and builder_hex from builder.ref, which must carry the tag v<version>.
+read_builder() {
+    ref_file="$(dirname -- "$LOCK")/builder.ref"
+    [ -f "$ref_file" ] || die "$ref_file is missing"
+    ref=$(sed -n 1p "$ref_file")
+    printf '%s\n' "$ref" | grep -Eq '^[^@[:space:]]+:[^:@/[:space:]]+@sha256:[0-9a-f]{64}$' ||
+        die "$ref_file is not <repository>:v<version>@sha256:<64 hex>"
+    name_and_tag=${ref%@*}
+    builder_hex=${ref##*sha256:}
+    builder_repo=${name_and_tag%:*}
+    builder_tag=${name_and_tag##*:}
+    [ "$builder_tag" = "v$version" ] ||
+        die "$ref_file has tag $builder_tag, but the lock's factory is v$version"
+}
+
+# Sets use_cosign to yes or no after applying FACTORY_COSIGN.
+decide_cosign() {
+    case $FACTORY_COSIGN in
+    off)
+        use_cosign=no
+        say "signature checks are off (FACTORY_COSIGN=off)"
+        ;;
+    required)
+        command -v cosign >/dev/null 2>&1 || die "FACTORY_COSIGN=required, but cosign is not on PATH"
+        use_cosign=yes
+        ;;
+    auto)
+        if command -v cosign >/dev/null 2>&1; then
+            use_cosign=yes
+        else
+            use_cosign=no
+            say "cosign is not on PATH: signature checks skipped (only the sha256 is checked)"
+        fi
+        ;;
+    *) die "FACTORY_COSIGN must be auto, required or off, not $FACTORY_COSIGN" ;;
+    esac
+}
+
+pyz_is_good() {
+    [ -f "$pyz" ] && printf '%s  %s\n' "$sha256" "$pyz" | sha256sum --check --strict --status 2>/dev/null
+}
+
+install_factory() {
+    read_pin
+    read_builder
+    decide_cosign
+    identity="https://github.com/foreverworks/debian-image-factory/.github/workflows/release.yml@refs/tags/v$version"
+    mkdir -p "$FACTORY_HOME"
+    if pyz_is_good; then
+        say "$pyz is already here with the right sha256"
+    else
+        part="$pyz.part"
+        say "downloading $url"
+        curl --fail --location --proto '=https' --proto-redir '=https' --retry 3 --silent --show-error \
+            --output "$part" "$url" || die "download of $url failed"
+        printf '%s  %s\n' "$sha256" "$part" | sha256sum --check --strict >/dev/null ||
+            die "$url does not have the sha256 the lock pins ($sha256)"
+        mv -f -- "$part" "$pyz"
+    fi
+    printed=$(python3 "$pyz" --version) || die "$pyz does not run"
+    [ "$printed" = "debian-image-factory $version" ] ||
+        die "$pyz says '$printed', not 'debian-image-factory $version'"
+    if [ "$use_cosign" = yes ]; then
+        bundle="$pyz.sigstore.json"
+        curl --fail --location --proto '=https' --proto-redir '=https' --retry 3 --silent --show-error \
+            --output "$bundle" "$url.sigstore.json" || die "download of $url.sigstore.json failed"
+        cosign verify-blob --bundle "$bundle" \
+            --certificate-oidc-issuer "$issuer" --certificate-identity "$identity" "$pyz" >/dev/null 2>&1 ||
+            die "the signature of $pyz does not verify for $identity"
+        say "signature of $pyz verified"
+    fi
+    pull_builder
+    echo "debian-image-factory $version ready: $pyz, builder $builder_repo@sha256:$builder_hex"
+}
+
+pull_builder() {
+    docker pull --quiet "$builder_repo@sha256:$builder_hex" >/dev/null ||
+        die "cannot pull $builder_repo@sha256:$builder_hex"
+    if [ "$use_cosign" = yes ]; then
+        cosign verify "$builder_repo@sha256:$builder_hex" \
+            --certificate-oidc-issuer "$issuer" --certificate-identity "$identity" >/dev/null 2>&1 ||
+            die "the signature of $builder_repo@sha256:$builder_hex does not verify for $identity"
+        say "signature of the builder image verified"
+    fi
+}
+
+ensure_factory() {
+    read_pin
+    pyz_is_good || install_factory >&2
+}
+
+[ "$#" -ge 1 ] || die "usage: scripts/factory install | builder | pyz | COMMAND [ARGS]"
+command=$1
+shift
+
+case $command in
+install)
+    install_factory
+    ;;
+builder)
+    read_pin
+    read_builder
+    echo "$builder_repo@sha256:$builder_hex"
+    ;;
+pyz)
+    ensure_factory
+    echo "$pyz"
+    ;;
+*)
+    ensure_factory
+    if [ "$command" = build ]; then
+        read_builder
+        named=no
+        for argument in "$@"; do
+            case $argument in
+            --builder-image | --builder-image=*) named=yes ;;
+            esac
+        done
+        if [ "$named" = no ]; then
+            # The factory runs the builder from the local image store, so make sure it is there.
+            docker image inspect "$builder_repo@sha256:$builder_hex" >/dev/null 2>&1 ||
+                docker pull --quiet "$builder_repo@sha256:$builder_hex" >/dev/null ||
+                die "cannot pull $builder_repo@sha256:$builder_hex"
+            set -- "$@" --builder-image "$builder_repo@sha256:$builder_hex"
+        fi
+    fi
+    exec python3 "$pyz" "$command" "$@"
+    ;;
+esac
