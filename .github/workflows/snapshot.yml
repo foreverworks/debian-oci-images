@@ -1,24 +1,58 @@
-# Every hour: does the newest Debian snapshot change any published image? If it does, this
-# workflow writes that snapshot to the `snapshot-feed` branch and ticks the Dependency Dashboard's
-# "run again" box, and Renovate (renovate.json, the debian-snapshot datasource) opens a pull request
-# that moves lock.json's debian_snapshot to it. That pull request merges itself once CI passes, and the
-# merge releases (release-next.yml).
+# Does the newest Debian snapshot change any published image? If it does, this workflow writes that
+# snapshot to the `snapshot-feed` branch and ticks the Dependency Dashboard's "run again" box, and
+# Renovate (renovate.json, the debian-snapshot datasource) opens a pull request that moves lock.json's
+# debian_snapshot to it. That pull request merges itself once CI passes, and the merge releases
+# (release-next.yml).
+#
+# What starts it:
+#   - the hourly schedule, the fallback that needs nobody to call;
+#   - repository_dispatch (type upstream-changed) or workflow_dispatch, how an outside poller starts it
+#     within a minute or two of a change upstream. Both carry the same three optional keys, in
+#     client_payload or in the inputs: `source` (debian, node or manual), `snapshot` (the newest
+#     completed snapshot the caller saw, YYYYMMDDTHHMMSSZ) and `seen_at` (the RFC 3339 time it saw the
+#     change). A key that fails its format is ignored with a warning;
+#   - the end of every release run, because a dispatch that arrives while a release is under way is
+#     skipped (below) and would otherwise wait for the next hour.
 #
 # The plan runs against what the last release published (the two ghcr.io repositories and the core
 # tarball on its GitHub release), so it answers exactly "would a release now build anything new?".
 # A snapshot whose uploads touch no package of these images builds nothing and moves nothing.
 #
 # snapshot.debian.org records the main archive about every six hours and the security archive each time
-# it changes, often several times a day; an hourly plan keeps a security fix's delay after its snapshot
-# under an hour. Planning downloads only the signed indices.
+# it changes, often several times a day. It caches its listing for up to ten minutes, so when the caller
+# names the snapshot it saw, the plan is repeated (up to 12 times, a minute apart) until it sees that
+# snapshot or a newer one. Planning downloads only the signed indices.
 #
-# Two jobs, so the job that talks to the archive never holds a write token (DESIGN.md, section 6).
+# A Node.js release changes no Debian snapshot: for source node the plan and the feed are skipped, and the
+# only job is to tick the dashboard's box, so Renovate's node-version datasource opens that pull request.
+#
+# Three jobs, so the job that talks to the archive never holds a write token, and the two that write
+# hold one scope each (DESIGN.md, section 6).
 name: snapshot
 
 on:
   schedule:
     - cron: "41 * * * *"
+  repository_dispatch:
+    types: [upstream-changed]
   workflow_dispatch:
+    inputs:
+      source:
+        description: "What changed: debian, node or manual"
+        type: string
+        default: manual
+        required: false
+      snapshot:
+        description: "The newest completed snapshot the caller saw, YYYYMMDDTHHMMSSZ"
+        type: string
+        required: false
+      seen_at:
+        description: "When the caller saw the change, RFC 3339 UTC"
+        type: string
+        required: false
+  workflow_run:
+    workflows: [release]
+    types: [completed]
 
 permissions:
   contents: read
@@ -30,12 +64,61 @@ concurrency:
 jobs:
   plan:
     name: plan the newest snapshot against the last release
+    # A Node.js release changes no Debian snapshot, so it has nothing to plan (ask-renovate handles it).
+    if: github.event.client_payload.source != 'node' && inputs.source != 'node'
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
+    timeout-minutes: 30 # a retry loop of up to 12 plans, a minute apart, then the plan itself
     outputs:
       changed: ${{ steps.plan.outputs.changed }}
       snapshot: ${{ steps.plan.outputs.snapshot }}
     steps:
+      # What started this run. The values come from whoever dispatched it, so they pass through env:,
+      # are checked against their format, and are never printed back: a bad one is ignored.
+      - name: Read what started this run, and how long the start took
+        id: trigger
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          IN_SOURCE: ${{ github.event.client_payload.source || inputs.source }}
+          IN_SNAPSHOT: ${{ github.event.client_payload.snapshot || inputs.snapshot }}
+          IN_SEEN_AT: ${{ github.event.client_payload.seen_at || inputs.seen_at }}
+        run: |
+          set -eu
+          source=manual
+          case "$IN_SOURCE" in
+            debian | node | manual) source=$IN_SOURCE ;;
+            "") ;;
+            *) echo "::warning::ignoring the source: it is not debian, node or manual" ;;
+          esac
+          asked=
+          if [ -n "$IN_SNAPSHOT" ]; then
+            if printf '%s' "$IN_SNAPSHOT" | grep -Eq '^[0-9]{8}T[0-9]{6}Z$'; then
+              asked=$IN_SNAPSHOT
+            else
+              echo "::warning::ignoring the snapshot: it is not YYYYMMDDTHHMMSSZ"
+            fi
+          fi
+          seen=
+          if [ -n "$IN_SEEN_AT" ]; then
+            if printf '%s' "$IN_SEEN_AT" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$' &&
+              date -d "$IN_SEEN_AT" +%s > /dev/null 2>&1; then
+              seen=$IN_SEEN_AT
+            else
+              echo "::warning::ignoring seen_at: it is not an RFC 3339 time"
+            fi
+          fi
+          {
+            echo "source=$source"
+            echo "asked_snapshot=$asked"
+          } >> "$GITHUB_OUTPUT"
+          if [ -n "$seen" ]; then
+            created=$(gh api "repos/$REPO/actions/runs/$GITHUB_RUN_ID" --jq .created_at)
+            latency=$(($(date -d "$created" +%s) - $(date -d "$seen" +%s)))
+            line="dispatch latency: $latency s (source $source, seen $seen, run created $created)"
+            echo "$line"
+            echo "$line" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -90,24 +173,37 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          ASKED: ${{ steps.trigger.outputs.asked_snapshot }}
         run: |
           set -eu
           mkdir -p work
           tag=$(gh release view --repo "$REPO" --json tagName --jq .tagName)
-          scripts/factory plan --snapshot latest \
-            --against oci://ghcr.io/foreverworks/debian --against oci://ghcr.io/foreverworks/node \
-            --against "github-release://$REPO@$tag" --out work/plan.json
+          # snapshot.debian.org answers its listing from a cache of up to ten minutes: when the caller saw a
+          # newer snapshot than the plan does, plan again a minute later, at most 12 times in all.
+          attempt=1
+          while :; do
+            scripts/factory plan --snapshot latest \
+              --against oci://ghcr.io/foreverworks/debian --against oci://ghcr.io/foreverworks/node \
+              --against "github-release://$REPO@$tag" --out work/plan.json
+            snapshot=$(jq -r .snapshot work/plan.json)
+            echo "$snapshot" | grep -Eq '^[0-9]{8}T[0-9]{6}Z$' || { echo "the plan's snapshot is $snapshot" >&2; exit 1; }
+            [[ -z "$ASKED" || ! "$snapshot" < "$ASKED" || "$attempt" -ge 12 ]] && break
+            echo "the plan sees $snapshot, older than the $ASKED the caller saw: attempt $attempt of 12, planning again in 60 s"
+            attempt=$((attempt + 1))
+            sleep 60
+          done
           python3 scripts/images.py plan work/plan.json > work/states.txt
           cat work/states.txt
           grep '^changed=' work/states.txt >> "$GITHUB_OUTPUT"
-          snapshot=$(jq -r .snapshot work/plan.json)
-          echo "$snapshot" | grep -Eq '^[0-9]{8}T[0-9]{6}Z$' || { echo "the plan's snapshot is $snapshot" >&2; exit 1; }
           echo "snapshot=$snapshot" >> "$GITHUB_OUTPUT"
           {
             echo "Planned at $snapshot against release $tag:"
             echo '```'
             cat work/states.txt
             echo '```'
+            if [[ -n "$ASKED" && "$snapshot" < "$ASKED" ]]; then
+              echo "The listing still showed a snapshot older than the $ASKED the caller saw after $attempt attempts: this plan used what it had."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   feed:
@@ -118,7 +214,6 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: write # the snapshot-feed branch only: one orphan commit holding debian-snapshot.json
-      issues: write # ticks the Dependency Dashboard's "run again" box, so Renovate reads the feed now
     steps:
       - name: Write debian-snapshot.json to the snapshot-feed branch, unless it already holds this snapshot
         env:
@@ -145,8 +240,19 @@ jobs:
           git -c http.extraheader="AUTHORIZATION: basic $auth" push --quiet --force "$SERVER/$REPO" HEAD:refs/heads/snapshot-feed
           echo "the feed now holds $SNAPSHOT" >> "$GITHUB_STEP_SUMMARY"
 
-      # Renovate runs on its own schedule. Its Dependency Dashboard has a box that asks for a run now;
-      # ticking it is Renovate's own way to be called (docs.renovatebot.com, key concepts: dashboard).
+  # Renovate runs on its own schedule. Its Dependency Dashboard has a box that asks for a run now;
+  # ticking it is Renovate's own way to be called (docs.renovatebot.com, key concepts: dashboard).
+  # It runs after a feed was written, or at once for a Node.js release, which Renovate's own
+  # node-version datasource finds without a feed. A plan that was skipped or found nothing ticks nothing.
+  ask-renovate:
+    name: ask Renovate to run now
+    needs: [plan, feed]
+    if: always() && (needs.feed.result == 'success' || github.event.client_payload.source == 'node' || inputs.source == 'node')
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      issues: write # ticks the Dependency Dashboard's "run again" box, so Renovate reads the feed now
+    steps:
       - name: Ask Renovate to run now
         env:
           GH_TOKEN: ${{ github.token }}

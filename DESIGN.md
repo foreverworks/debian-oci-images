@@ -180,7 +180,7 @@ runs the build in a container with no network; under a rootful Docker, `--privil
 factory DESIGN 5.4). The runner is a throwaway machine, and the one job that holds a write token never
 runs a build.
 
-Three other jobs may write, each only the scopes `scripts/policy.py` allows it, and none runs a build:
+Four other jobs may write, each only the scopes `scripts/policy.py` allows it, and none runs a build:
 
 - `checksums` in `renovate-checksums.yml` (`contents`, `actions`). It runs only `actions/checkout` and the
   pinned input-lock Action, never this repository's scripts or a package's, and it runs only on pushes to
@@ -188,8 +188,9 @@ Three other jobs may write, each only the scopes `scripts/policy.py` allows it, 
   `ci.yml` on that branch.
 - `tag` in `release-next.yml` (`contents`, `actions`), on `main` only. It runs `git` and
   `scripts/release_next.py`, creates one version tag and dispatches `release.yml` on it.
-- `feed` in `snapshot.yml` (`contents`, `issues`). It checks nothing out; it force-pushes one orphan
-  commit holding `debian-snapshot.json` to the branch `snapshot-feed`, and ticks the "run again" box of
+- `feed` in `snapshot.yml` (`contents`). It checks nothing out; it force-pushes one orphan
+  commit holding `debian-snapshot.json` to the branch `snapshot-feed`.
+- `ask-renovate` in `snapshot.yml` (`issues`). It checks nothing out; it ticks the "run again" box of
   Renovate's Dependency Dashboard issue.
 
 **How an update reaches the images.** Every update is a pull request that merges itself once CI passes,
@@ -247,15 +248,30 @@ and `test`, so its `ancestry` check runs and the child passes and is kept as goo
 
 ### snapshot.yml
 
-Every hour and on demand. One read-only job plans at the **newest** snapshot against what the
-last release published: `oci://ghcr.io/foreverworks/debian`, `oci://ghcr.io/foreverworks/node` and the
-core tarball on the newest GitHub release. `changed=true` means a release now would build something
-new: a Debian upload touched a package of an image. A second job then writes that snapshot ID to
-`debian-snapshot.json` on the branch `snapshot-feed`, which Renovate reads as the custom datasource
-`debian-snapshot` and turns into a pull request moving `debian_snapshot` in the lock. It then ticks the
-Dependency Dashboard's "run again" box, so Renovate reads the feed at once instead of on its own
-schedule. The branch must always exist (seeded with the lock's snapshot): without it Renovate reports
-`no-result` for `debian-snapshot` on the dashboard.
+Every hour, on demand, and when told that something changed. One read-only job plans at the **newest**
+snapshot against what the last release published: `oci://ghcr.io/foreverworks/debian`,
+`oci://ghcr.io/foreverworks/node` and the core tarball on the newest GitHub release. `changed=true`
+means a release now would build something new: a Debian upload touched a package of an image. A second
+job then writes that snapshot ID to `debian-snapshot.json` on the branch `snapshot-feed`, which Renovate
+reads as the custom datasource `debian-snapshot` and turns into a pull request moving `debian_snapshot`
+in the lock. A third job ticks the Dependency Dashboard's "run again" box, so Renovate reads the feed at
+once instead of on its own schedule. The branch must always exist (seeded with the lock's snapshot):
+without it Renovate reports `no-result` for `debian-snapshot` on the dashboard.
+
+What starts it. The hourly schedule is the fallback and needs nobody to call it. An outside poller that
+watches upstream starts it within a minute or two of a change, with a `repository_dispatch` event of type
+`upstream-changed` or a `workflow_dispatch`. Both carry three optional keys (`client_payload` or the
+inputs): `source` (`debian`, `node` or `manual`), `snapshot` (the newest completed snapshot the caller
+saw, `YYYYMMDDTHHMMSSZ`) and `seen_at` (the RFC 3339 time it saw the change). A key with a bad format is
+ignored with a warning. With `seen_at` the run's summary records the dispatch latency. With `snapshot`,
+the plan is repeated, a minute apart and at most 12 times, while the listing it sees is older than that
+snapshot (snapshot.debian.org caches its listing for up to ten minutes), and then uses what it has. The
+end of every `release.yml` run also starts it, because a dispatch that arrives during a release is
+skipped (below) and would otherwise wait for the next hour.
+
+A Node.js release changes no Debian snapshot: for `source` `node` the plan and the feed are skipped and
+the third job ticks the box at once, so Renovate's `node-version` datasource opens that pull request. A
+plan that was skipped or found nothing ticks nothing.
 
 The plan is skipped while a release is due or under way (`scripts/release_next.py pending`, or a
 `release-next.yml` or `release.yml` run not yet finished): until it finishes the registry holds the old

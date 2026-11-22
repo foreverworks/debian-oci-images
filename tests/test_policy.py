@@ -156,7 +156,10 @@ class WritePermissionTests(unittest.TestCase):
         self.assertEqual(len(policy.check_write_permissions(".github/workflows/ci.yml", self.RENOVATE)), 2)
 
     RELEASE_NEXT = "jobs:\n  tag:\n    permissions:\n      contents: write\n      actions: write\n"
-    SNAPSHOT = "jobs:\n  plan:\n    steps: []\n  feed:\n    permissions:\n      contents: write\n      issues: write\n"
+    SNAPSHOT = (
+        "jobs:\n  plan:\n    steps: []\n  feed:\n    permissions:\n      contents: write\n"
+        "  ask-renovate:\n    permissions:\n      issues: write\n"
+    )
 
     def test_the_tag_job_of_release_next_may_write_contents_and_actions(self) -> None:
         self.assertEqual(policy.check_write_permissions(".github/workflows/release-next.yml", self.RELEASE_NEXT), [])
@@ -165,10 +168,14 @@ class WritePermissionTests(unittest.TestCase):
         text = self.RELEASE_NEXT + "      packages: write\n"
         self.assertEqual(len(policy.check_write_permissions("release-next.yml", text)), 1)
 
-    def test_the_feed_job_of_snapshot_may_write_contents_and_issues_only(self) -> None:
+    def test_the_feed_and_ask_renovate_jobs_of_snapshot_may_write_one_scope_each(self) -> None:
         self.assertEqual(policy.check_write_permissions(".github/workflows/snapshot.yml", self.SNAPSHOT), [])
         text = self.SNAPSHOT + "      actions: write\n"
         self.assertEqual(len(policy.check_write_permissions("snapshot.yml", text)), 1)
+        feed_issues = "jobs:\n  feed:\n    permissions:\n      issues: write\n"
+        self.assertEqual(len(policy.check_write_permissions("snapshot.yml", feed_issues)), 1)
+        ask_contents = "jobs:\n  ask-renovate:\n    permissions:\n      contents: write\n"
+        self.assertEqual(len(policy.check_write_permissions("snapshot.yml", ask_contents)), 1)
 
     def test_the_plan_job_of_snapshot_may_not_write(self) -> None:
         text = "jobs:\n  plan:\n    permissions:\n      contents: write\n"

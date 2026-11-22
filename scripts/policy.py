@@ -13,7 +13,7 @@ Rules:
 - every oci image of factory.toml has a repository to be published to.
 - a `<scope>: write` permission appears only in the publish job of release.yml, the checksums job of
   renovate-checksums.yml (contents and actions only), the tag job of release-next.yml (contents and
-  actions only) and the feed job of snapshot.yml (contents and issues only).
+  actions only) and the feed job of snapshot.yml (contents only) and its ask-renovate job (issues only).
 
 Prints every problem found and exits 1, or prints nothing and exits 0.
 """
@@ -49,7 +49,8 @@ WRITERS: dict[tuple[str, str], frozenset[str] | None] = {
     ("release.yml", "publish"): None,
     ("renovate-checksums.yml", "checksums"): frozenset({"contents", "actions"}),
     ("release-next.yml", "tag"): frozenset({"contents", "actions"}),
-    ("snapshot.yml", "feed"): frozenset({"contents", "issues"}),
+    ("snapshot.yml", "feed"): frozenset({"contents"}),
+    ("snapshot.yml", "ask-renovate"): frozenset({"issues"}),
 }
 
 
