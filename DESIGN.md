@@ -188,8 +188,9 @@ Three other jobs may write, each only the scopes `scripts/policy.py` allows it, 
   `ci.yml` on that branch.
 - `tag` in `release-next.yml` (`contents`, `actions`), on `main` only. It runs `git` and
   `scripts/release_next.py`, creates one version tag and dispatches `release.yml` on it.
-- `feed` in `snapshot.yml` (`contents`). It checks nothing out; it force-pushes one orphan commit holding
-  `debian-snapshot.json` to the branch `snapshot-feed`.
+- `feed` in `snapshot.yml` (`contents`, `issues`). It checks nothing out; it force-pushes one orphan
+  commit holding `debian-snapshot.json` to the branch `snapshot-feed`, and ticks the "run again" box of
+  Renovate's Dependency Dashboard issue.
 
 **How an update reaches the images.** Every update is a pull request that merges itself once CI passes,
 and every merge that changes an input (`lock.json`, `factory.toml`, `builder.ref`) is released:
@@ -246,18 +247,21 @@ and `test`, so its `ancestry` check runs and the child passes and is kept as goo
 
 ### snapshot.yml
 
-Every three hours and on demand. One read-only job plans at the **newest** snapshot against what the
+Every hour and on demand. One read-only job plans at the **newest** snapshot against what the
 last release published: `oci://ghcr.io/foreverworks/debian`, `oci://ghcr.io/foreverworks/node` and the
 core tarball on the newest GitHub release. `changed=true` means a release now would build something
 new: a Debian upload touched a package of an image. A second job then writes that snapshot ID to
 `debian-snapshot.json` on the branch `snapshot-feed`, which Renovate reads as the custom datasource
-`debian-snapshot` and turns into a pull request moving `debian_snapshot` in the lock.
+`debian-snapshot` and turns into a pull request moving `debian_snapshot` in the lock. It then ticks the
+Dependency Dashboard's "run again" box, so Renovate reads the feed at once instead of on its own
+schedule. The branch must always exist (seeded with the lock's snapshot): without it Renovate reports
+`no-result` for `debian-snapshot` on the dashboard.
 
 The plan is skipped while a release is due or under way (`scripts/release_next.py pending`, or a
 `release-next.yml` or `release.yml` run not yet finished): until it finishes the registry holds the old
-images, and the plan would propose a snapshot for changes already on their way. Debian's snapshot
-service takes a snapshot about every six hours, so a relevant upload reaches a pull request within
-about three hours of its snapshot, plus Renovate's own schedule.
+images, and the plan would propose a snapshot for changes already on their way. snapshot.debian.org
+records the main archive about every six hours and the security archive each time it changes, often
+several times a day, so a security fix reaches a pull request within about an hour of its snapshot.
 
 The cache stands in for the registry because the real target does not exist before the first release
 (section 9).

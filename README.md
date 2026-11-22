@@ -164,7 +164,7 @@ factory's own wording is in its
   whose inputs changed, and a child built alone is tested against its parent as the cache holds it.
   A quiet night builds nothing. Nightly builds go to a cache and are never pushed
   to `ghcr.io`: they exist to show that the next release would build and pass its checks.
-- **Debian updates.** Every three hours a workflow plans the newest Debian snapshot against what the last
+- **Debian updates.** Every hour a workflow plans the newest Debian snapshot against what the last
   release published. When a Debian upload (often a security fix) changes one of the images, Renovate
   opens a pull request that moves the lock to that snapshot. A snapshot that touches none of their
   packages changes nothing.

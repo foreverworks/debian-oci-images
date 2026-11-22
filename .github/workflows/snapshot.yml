@@ -1,21 +1,23 @@
-# Every three hours: does the newest Debian snapshot change any published image? If it does, this
-# workflow writes that snapshot to the `snapshot-feed` branch, and Renovate (renovate.json, the
-# debian-snapshot datasource) opens a pull request that moves lock.json's debian_snapshot to it. That
-# pull request merges itself once CI passes, and the merge releases (release-next.yml).
+# Every hour: does the newest Debian snapshot change any published image? If it does, this
+# workflow writes that snapshot to the `snapshot-feed` branch and ticks the Dependency Dashboard's
+# "run again" box, and Renovate (renovate.json, the debian-snapshot datasource) opens a pull request
+# that moves lock.json's debian_snapshot to it. That pull request merges itself once CI passes, and the
+# merge releases (release-next.yml).
 #
 # The plan runs against what the last release published (the two ghcr.io repositories and the core
 # tarball on its GitHub release), so it answers exactly "would a release now build anything new?".
 # A snapshot whose uploads touch no package of these images builds nothing and moves nothing.
 #
-# Debian's snapshot service takes a snapshot about every six hours; running twice as often keeps the
-# delay after one under three hours. Planning downloads only the signed indices.
+# snapshot.debian.org records the main archive about every six hours and the security archive each time
+# it changes, often several times a day; an hourly plan keeps a security fix's delay after its snapshot
+# under an hour. Planning downloads only the signed indices.
 #
 # Two jobs, so the job that talks to the archive never holds a write token (DESIGN.md, section 6).
 name: snapshot
 
 on:
   schedule:
-    - cron: "41 */3 * * *"
+    - cron: "41 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -116,6 +118,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: write # the snapshot-feed branch only: one orphan commit holding debian-snapshot.json
+      issues: write # ticks the Dependency Dashboard's "run again" box, so Renovate reads the feed now
     steps:
       - name: Write debian-snapshot.json to the snapshot-feed branch, unless it already holds this snapshot
         env:
@@ -141,3 +144,25 @@ jobs:
           echo "::add-mask::$auth"
           git -c http.extraheader="AUTHORIZATION: basic $auth" push --quiet --force "$SERVER/$REPO" HEAD:refs/heads/snapshot-feed
           echo "the feed now holds $SNAPSHOT" >> "$GITHUB_STEP_SUMMARY"
+
+      # Renovate runs on its own schedule. Its Dependency Dashboard has a box that asks for a run now;
+      # ticking it is Renovate's own way to be called (docs.renovatebot.com, key concepts: dashboard).
+      - name: Ask Renovate to run now
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          issue=$(gh issue list --repo "$REPO" --author app/renovate --state open --search "Dependency Dashboard in:title" --json number --jq '.[0].number // empty')
+          if [ -z "$issue" ]; then
+            echo "no Dependency Dashboard: Renovate reads the feed on its next scheduled run" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          gh issue view "$issue" --repo "$REPO" --json body --jq .body > body.md
+          if ! grep -q -- '- \[ \] <!-- manual job -->' body.md; then
+            echo "the dashboard's run-again box is already ticked" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          sed 's/- \[ \] <!-- manual job -->/- [x] <!-- manual job -->/' body.md > ticked.md
+          gh issue edit "$issue" --repo "$REPO" --body-file ticked.md > /dev/null
+          echo "asked Renovate to run now (dashboard #$issue)" >> "$GITHUB_STEP_SUMMARY"

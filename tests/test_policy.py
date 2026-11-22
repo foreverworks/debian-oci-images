@@ -156,7 +156,7 @@ class WritePermissionTests(unittest.TestCase):
         self.assertEqual(len(policy.check_write_permissions(".github/workflows/ci.yml", self.RENOVATE)), 2)
 
     RELEASE_NEXT = "jobs:\n  tag:\n    permissions:\n      contents: write\n      actions: write\n"
-    SNAPSHOT = "jobs:\n  plan:\n    steps: []\n  feed:\n    permissions:\n      contents: write\n"
+    SNAPSHOT = "jobs:\n  plan:\n    steps: []\n  feed:\n    permissions:\n      contents: write\n      issues: write\n"
 
     def test_the_tag_job_of_release_next_may_write_contents_and_actions(self) -> None:
         self.assertEqual(policy.check_write_permissions(".github/workflows/release-next.yml", self.RELEASE_NEXT), [])
@@ -165,7 +165,7 @@ class WritePermissionTests(unittest.TestCase):
         text = self.RELEASE_NEXT + "      packages: write\n"
         self.assertEqual(len(policy.check_write_permissions("release-next.yml", text)), 1)
 
-    def test_the_feed_job_of_snapshot_may_write_contents_only(self) -> None:
+    def test_the_feed_job_of_snapshot_may_write_contents_and_issues_only(self) -> None:
         self.assertEqual(policy.check_write_permissions(".github/workflows/snapshot.yml", self.SNAPSHOT), [])
         text = self.SNAPSHOT + "      actions: write\n"
         self.assertEqual(len(policy.check_write_permissions("snapshot.yml", text)), 1)
