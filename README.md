@@ -166,7 +166,7 @@ factory's own wording is in its
   A quiet night builds nothing. Nightly builds go to a cache and are never pushed
   to `ghcr.io`: they exist to show that the next release would build and pass its checks.
 - **Renovate** opens a pull request for each new Node.js patch or minor version inside a supported line,
-  and for a new factory release. It never moves a line to the next major version.
+  and for a new factory release. A workflow then commits the new checksums to Renovate's branch. It never moves a line to the next major version.
 - **Releases are deliberate.** A person creates a version tag. The release workflow builds and tests
   everything, publishes, verifies what it pushed, signs it, and only then moves the tags. Debian
   security updates reach the images through the snapshot the nightly plan found, in the next release.

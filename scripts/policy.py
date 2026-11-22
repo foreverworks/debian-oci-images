@@ -11,7 +11,8 @@ Rules:
 - builder.ref names the tag v<lock's factory version> and a sha256 digest;
 - every node-<N> image of factory.toml has a lock entry node-<N> of Node.js N, used by that image only;
 - every oci image of factory.toml has a repository to be published to.
-- a `<scope>: write` permission appears only in the publish job of release.yml.
+- a `<scope>: write` permission appears only in the publish job of release.yml, and in the checksums job
+  of renovate-checksums.yml (contents and actions only).
 
 Prints every problem found and exits 1, or prints nothing and exits 0.
 """
@@ -42,11 +43,15 @@ def _indent(line: str) -> int:
 
 WRITE_RE = re.compile(r"^\s*(?P<scope>[a-z-]+):\s*write(?:-all)?\s*(?:#.*)?$")
 JOB_RE = re.compile(r"^  (?P<job>[A-Za-z0-9_-]+):\s*(?:#.*)?$")
-WRITER = ("release.yml", "publish")  # the one job that may hold a write permission
+# The jobs that may hold a write permission, and the scopes each may write (None: any).
+WRITERS: dict[tuple[str, str], frozenset[str] | None] = {
+    ("release.yml", "publish"): None,
+    ("renovate-checksums.yml", "checksums"): frozenset({"contents", "actions"}),
+}
 
 
 def check_write_permissions(name: str, text: str) -> list[str]:
-    """A `<scope>: write` permission anywhere but the publish job of release.yml. The jobs that build run
+    """A `<scope>: write` permission anywhere but the jobs in WRITERS. The jobs that build run
     package scripts as root, so they must never hold a token that writes (DESIGN.md, section 6)."""
     problems: list[str] = []
     in_jobs = False
@@ -60,10 +65,11 @@ def check_write_permissions(name: str, text: str) -> list[str]:
             job = found.group("job")
             continue
         write = WRITE_RE.match(line)
-        if write and (Path(name).name, job) != WRITER:
+        key = (Path(name).name, job or "")
+        if write and not (key in WRITERS and (WRITERS[key] is None or write.group("scope") in (WRITERS[key] or ()))):
             where = "top level" if job is None else f"job {job}"
             problems.append(
-                f"{name}:{number}: {write.group('scope')}: write in {where}: only the publish job of release.yml may write"
+                f"{name}:{number}: {write.group('scope')}: write in {where}: only the jobs listed in WRITERS may write, and only these scopes"
             )
     return problems
 

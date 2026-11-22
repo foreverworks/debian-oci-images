@@ -180,6 +180,11 @@ runs the build in a container with no network; under a rootful Docker, `--privil
 factory DESIGN 5.4). The runner is a throwaway machine, and the one job that holds a write token never
 runs a build.
 
+The one other job that may write is `checksums` in `renovate-checksums.yml` (`contents` and `actions`,
+enforced by `scripts/policy.py`). It runs only `actions/checkout` and the pinned input-lock Action, never
+this repository's scripts or a package's, and it runs only on pushes to Renovate's branches and
+commits only to the branch it was started on. It needs `actions` to dispatch `ci.yml` on that branch.
+
 ### ci.yml
 
 On every push to `main` and every pull request:
@@ -327,11 +332,14 @@ and deleting the interim code in the same pull request, never by leaving both.
 - **New LTS lines.** Node.js 27 is scheduled to become LTS on 2027-10-20 (nodejs/release schedule). It gets a block in `factory.toml`, an entry
   in the lock and a row in the tables, as a reviewed change.
 - **Signed records**, when the factory supports them (section 8, gap 1).
-- **Checksums on Renovate branches.** The input-lock Renovate preset expects an Action that commits the
-  new checksum of a bumped entry to Renovate's branch. This repository has none yet, so a Node.js or
-  factory bump arrives with the old sha256 and CI's `fetch` fails, safely, until a maintainer runs
-  `scripts/factory lock checksums --base origin/main` on the branch (it checks Node.js's signed list
-  first). A workflow that does this on Renovate's own branches is the next step.
+- **Checksums on Renovate branches.** Renovate edits only the `version` of a lock entry. The
+  `renovate-checksums` workflow runs on pushes to `renovate/**` branches and uses the input-lock
+  Action (the same version as the Renovate preset) to rewrite the checksums of the entries Renovate
+  bumped. Renovate's branch gets a second commit with the new checksums, and CI's `fetch` then passes.
+  Node.js entries carry `signed_by`, so their checksums come from the release's signed list and the
+  signature is checked first. A commit pushed with the workflow's own token starts no workflow, so the
+  job's last step dispatches `ci.yml` on the branch when checksums changed. The lock must stay in the
+  form `input-lock format` writes, or the Action fails.
 
 ## 10. Checks this repository adds
 

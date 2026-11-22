@@ -136,6 +136,26 @@ class WritePermissionTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(len(policy.check_write_permissions("release.yml", text)), 1)
 
+    RENOVATE = (
+        "permissions:\n  contents: read\njobs:\n  checksums:\n    permissions:\n      contents: write\n"
+        "      actions: write\n"
+    )
+
+    def test_the_checksums_job_may_write_contents_and_actions(self) -> None:
+        self.assertEqual(policy.check_write_permissions(".github/workflows/renovate-checksums.yml", self.RENOVATE), [])
+
+    def test_the_checksums_job_may_write_nothing_else(self) -> None:
+        text = self.RENOVATE + "      packages: write\n"
+        self.assertEqual(len(policy.check_write_permissions("renovate-checksums.yml", text)), 1)
+
+    def test_a_second_job_of_that_file_may_not(self) -> None:
+        text = self.RENOVATE + "  other:\n    permissions:\n      contents: write\n"
+        self.assertEqual(len(policy.check_write_permissions("renovate-checksums.yml", text)), 1)
+
+    def test_another_workflow_may_not_write_contents(self) -> None:
+        self.assertEqual(len(policy.check_write_permissions(".github/workflows/ci.yml", self.RENOVATE)), 2)
+
+
 class BuilderRefTests(unittest.TestCase):
     REF = "ghcr.io/example/builder:v0.6.3@sha256:" + "c" * 64
 
