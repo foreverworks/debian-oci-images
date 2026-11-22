@@ -264,7 +264,7 @@ watches upstream starts it within a minute or two of a change, with a `repositor
 inputs): `source` (`debian`, `node` or `manual`), `snapshot` (the newest completed snapshot the caller
 saw, `YYYYMMDDTHHMMSSZ`) and `seen_at` (the RFC 3339 time it saw the change). A key with a bad format is
 ignored with a warning. With `seen_at` the run's summary records the dispatch latency. With `snapshot`,
-the plan is repeated, a minute apart and at most 12 times, while the listing it sees is older than that
+the plan is repeated, a minute apart and for at most 15 minutes, while the listing it sees is older than that
 snapshot (snapshot.debian.org caches its listing for up to ten minutes), and then uses what it has. The
 end of every `release.yml` run also starts it, because a dispatch that arrives during a release is
 skipped (below) and would otherwise wait for the next hour.

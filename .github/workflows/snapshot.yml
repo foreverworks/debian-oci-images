@@ -20,7 +20,7 @@
 #
 # snapshot.debian.org records the main archive about every six hours and the security archive each time
 # it changes, often several times a day. It caches its listing for up to ten minutes, so when the caller
-# names the snapshot it saw, the plan is repeated (up to 12 times, a minute apart) until it sees that
+# names the snapshot it saw, the plan is repeated (a minute apart, for at most 15 minutes) until it sees that
 # snapshot or a newer one. Planning downloads only the signed indices.
 #
 # A Node.js release changes no Debian snapshot: for source node the plan and the feed are skipped, and the
@@ -64,20 +64,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  plan:
-    name: plan the newest snapshot against the last release
-    # A Node.js release changes no Debian snapshot, so it has nothing to plan (ask-renovate handles it).
-    if: github.event.client_payload.source != 'node' && inputs.source != 'node'
+  # What started this run, read once for every job, Node.js dispatches included.
+  trigger:
+    name: read what started this run
     runs-on: ubuntu-26.04
-    timeout-minutes: 30 # a retry loop of up to 12 plans, a minute apart, then the plan itself
+    timeout-minutes: 5
     outputs:
-      changed: ${{ steps.plan.outputs.changed }}
-      snapshot: ${{ steps.plan.outputs.snapshot }}
+      source: ${{ steps.read.outputs.source }}
+      asked_snapshot: ${{ steps.read.outputs.asked_snapshot }}
     steps:
       # What started this run. The values come from whoever dispatched it, so they pass through env:,
       # are checked against their format, and are never printed back: a bad one is ignored.
       - name: Read what started this run, and how long the start took
-        id: trigger
+        id: read
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -94,7 +93,7 @@ jobs:
           esac
           asked=
           if [ -n "$IN_SNAPSHOT" ]; then
-            if printf '%s' "$IN_SNAPSHOT" | grep -Eq '^[0-9]{8}T[0-9]{6}Z$'; then
+            if [[ $IN_SNAPSHOT =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
               asked=$IN_SNAPSHOT
             else
               echo "::warning::ignoring the snapshot: it is not YYYYMMDDTHHMMSSZ"
@@ -102,7 +101,7 @@ jobs:
           fi
           seen=
           if [ -n "$IN_SEEN_AT" ]; then
-            if printf '%s' "$IN_SEEN_AT" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$' &&
+            if [[ $IN_SEEN_AT =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$ ]] &&
               date -d "$IN_SEEN_AT" +%s > /dev/null 2>&1; then
               seen=$IN_SEEN_AT
             else
@@ -114,13 +113,32 @@ jobs:
             echo "asked_snapshot=$asked"
           } >> "$GITHUB_OUTPUT"
           if [ -n "$seen" ]; then
-            created=$(gh api "repos/$REPO/actions/runs/$GITHUB_RUN_ID" --jq .created_at)
-            latency=$(($(date -d "$created" +%s) - $(date -d "$seen" +%s)))
-            line="dispatch latency: $latency s (source $source, seen $seen, run created $created)"
-            echo "$line"
-            echo "$line" >> "$GITHUB_STEP_SUMMARY"
+            # A log line only: an API blip must not stop the plan.
+            created=$(gh api "repos/$REPO/actions/runs/$GITHUB_RUN_ID" --jq .created_at) || created=
+            if [ -n "$created" ]; then
+              latency=$(($(date -d "$created" +%s) - $(date -d "$seen" +%s)))
+              note=
+              [ "$latency" -ge 0 ] || note=" (negative: the caller's clock runs ahead)"
+              line="dispatch latency: $latency s$note (source $source, seen $seen, run created $created)"
+              echo "$line"
+              echo "$line" >> "$GITHUB_STEP_SUMMARY"
+            fi
           fi
 
+  plan:
+    name: plan the newest snapshot against the last release
+    needs: trigger
+    # A Node.js release changes no Debian snapshot, so it has nothing to plan (ask-renovate handles it).
+    # A release that failed or was cancelled published nothing new, so it starts no plan either.
+    if: >-
+      needs.trigger.outputs.source != 'node' &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30 # the retry loop stops waiting after 15 minutes, then the plan itself
+    outputs:
+      changed: ${{ steps.plan.outputs.changed }}
+      snapshot: ${{ steps.plan.outputs.snapshot }}
+    steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -175,22 +193,23 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          ASKED: ${{ steps.trigger.outputs.asked_snapshot }}
+          ASKED: ${{ needs.trigger.outputs.asked_snapshot }}
         run: |
           set -eu
           mkdir -p work
           tag=$(gh release view --repo "$REPO" --json tagName --jq .tagName)
           # snapshot.debian.org answers its listing from a cache of up to ten minutes: when the caller saw a
-          # newer snapshot than the plan does, plan again a minute later, at most 12 times in all.
+          # newer snapshot than the plan does, plan again a minute later, for at most 15 minutes.
           attempt=1
+          SECONDS=0
           while :; do
             scripts/factory plan --snapshot latest \
               --against oci://ghcr.io/foreverworks/debian --against oci://ghcr.io/foreverworks/node \
               --against "github-release://$REPO@$tag" --out work/plan.json
             snapshot=$(jq -r .snapshot work/plan.json)
             echo "$snapshot" | grep -Eq '^[0-9]{8}T[0-9]{6}Z$' || { echo "the plan's snapshot is $snapshot" >&2; exit 1; }
-            [[ -z "$ASKED" || ! "$snapshot" < "$ASKED" || "$attempt" -ge 12 ]] && break
-            echo "the plan sees $snapshot, older than the $ASKED the caller saw: attempt $attempt of 12, planning again in 60 s"
+            [[ -z "$ASKED" || ! "$snapshot" < "$ASKED" || "$SECONDS" -ge 840 ]] && break
+            echo "the plan sees $snapshot, older than the $ASKED the caller saw: attempt $attempt, planning again in 60 s"
             attempt=$((attempt + 1))
             sleep 60
           done
@@ -248,8 +267,8 @@ jobs:
   # node-version datasource finds without a feed. A plan that was skipped or found nothing ticks nothing.
   ask-renovate:
     name: ask Renovate to run now
-    needs: [plan, feed]
-    if: always() && (needs.feed.result == 'success' || github.event.client_payload.source == 'node' || inputs.source == 'node')
+    needs: [trigger, plan, feed]
+    if: "!cancelled() && (needs.feed.result == 'success' || needs.trigger.outputs.source == 'node')"
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
