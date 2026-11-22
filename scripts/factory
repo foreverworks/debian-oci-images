@@ -13,6 +13,8 @@
 #   FACTORY_COSIGN  auto (default): check signatures when cosign is installed, say so when it is not
 #                   required: fail without cosign
 #                   off: do not check signatures
+#   FACTORY_BUILDER pull (default): install also pulls and verifies the builder image
+#                   skip: install only the .pyz (for a job that publishes and never builds)
 #
 # The sha256 in the lock is always checked. The signatures add proof of who built the files.
 set -eu
@@ -112,7 +114,7 @@ install_factory() {
             die "the signature of $pyz does not verify for $identity"
         say "signature of $pyz verified"
     fi
-    pull_builder
+    [ "${FACTORY_BUILDER:-pull}" = skip ] || pull_builder
     echo "debian-image-factory $version ready: $pyz, builder $builder_repo@sha256:$builder_hex"
 }
 

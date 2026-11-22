@@ -102,7 +102,12 @@ jobs:
         if: steps.plan.outputs.changed == 'true'
         run: |
           set -eu
-          scripts/factory publish work/out --to "oci://$REGISTRY/images" --to "dir://$PWD/.nightly/core"
+          # publish refuses a dir:// target when the output holds no file artifact, which is every night
+          # that rebuilt only OCI images (a Node.js bump): core goes to its target only when it was built.
+          scripts/factory publish work/out --to "oci://$REGISTRY/images"
+          if ls work/out/core-*.tar.gz > /dev/null 2>&1; then
+            scripts/factory publish work/out --to "dir://$PWD/.nightly/core"
+          fi
           scripts/factory prune --against "oci://$REGISTRY/images" --against "dir://$PWD/.nightly/core" \
             --definition factory.toml
 

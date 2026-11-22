@@ -1,6 +1,8 @@
 #!/bin/sh
-# Publish a tested build output: every OCI image to its repository, the core tarball to a GitHub
-# release, then verify each pushed image against its records, sign its digest and move its tags.
+# Publish a tested build output: every OCI image to its repository, then verify each pushed image
+# against its records, publish and verify the core tarball on a GitHub release, sign each image digest
+# and move its tags. Tags move one image at a time, last: a failure before that loop moves none, and a
+# re-run after a failure inside it completes the set.
 #
 #   scripts/release OUT REGISTRY
 #
@@ -45,16 +47,23 @@ while read -r repository dir; do
   "$here/factory" publish "$dir" --to "oci://$registry/$repository" < /dev/null
 done < "$work/repositories"
 
-if [ -n "${RELEASE:-}" ]; then
-  "$here/factory" publish "$out" --to "$RELEASE"
-fi
-
 # Every image as the registry now holds it must verify against its records, with every check the
 # definition requires passing, before anything is signed or tagged.
 while read -r image digest _layout _records; do
   repository=$(python3 "$here/images.py" repository "$image" < /dev/null)
   "$here/factory" verify "oci://$registry/$repository@$digest" --pull --require-checks --lock "$lock" --definition "$definition" < /dev/null
 done < "$work/layouts"
+
+# The core tarball goes to the GitHub release only once every image has verified, and is verified again
+# as the release now holds it.
+if [ -n "${RELEASE:-}" ]; then
+  "$here/factory" publish "$out" --to "$RELEASE"
+  for core in "$out"/core-*.tar.gz; do
+    [ -f "$core" ] || { echo "release: $out holds no core tarball for $RELEASE" >&2; exit 1; }
+    "$here/factory" verify "$RELEASE" --pull --artifact "$(basename "$core")" --require-checks \
+      --lock "$lock" --definition "$definition"
+  done
+fi
 
 if [ "$sign" = keyless ]; then
   while read -r image digest _layout _records; do

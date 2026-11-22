@@ -86,7 +86,7 @@ The tag in front of the digest is only a label for people. Docker uses the diges
 
 ## Verify
 
-You need [`cosign`](https://github.com/sigstore/cosign), and for the records
+You need [`cosign`](https://github.com/sigstore/cosign) 3.x (the release signs with cosign 3.1.4), and for the records
 [`oras`](https://oras.land) and Python 3.13 or newer. Use any `<digest>` you resolved above.
 
 ### 1. The signature
@@ -175,7 +175,9 @@ factory's own wording is in its
 
 ## Build it yourself
 
-You need Docker, Python 3.13 or newer, `apt` and `gpgv`. The factory runs the build in a container
+You need Docker, Python 3.13 or newer, `apt`, `gpgv`, Debian's archive keyring (the
+`debian-archive-keyring` package, at `/usr/share/keyrings/debian-archive-keyring.pgp`), `curl` and
+`sha256sum`, and `cosign` if you want the factory's signatures checked too. The factory runs the build in a container
 with no network, using Debian's own tools from a pinned snapshot.
 
 ```sh

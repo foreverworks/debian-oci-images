@@ -23,22 +23,22 @@ packages = ["ca-certificates", "tzdata"]
 [images.debian]
 kind = "oci"
 parent = "core"
-oci = { cmd = ["/bin/bash"], env = { LANG = "C.UTF-8" }, labels = { "org.opencontainers.image.title" = "debian", "org.opencontainers.image.description" = "Minimal Debian 13 (trixie) built from a pinned snapshot, with SBOM, provenance and test records", "org.opencontainers.image.licenses" = "MIT" } }
+oci = { cmd = ["/bin/bash"], env = { LANG = "C.UTF-8" }, labels = { "org.opencontainers.image.source" = "https://github.com/foreverworks/debian-oci-images", "org.opencontainers.image.title" = "debian", "org.opencontainers.image.description" = "Minimal Debian 13 (trixie) built from a pinned snapshot, with SBOM, provenance and test records", "org.opencontainers.image.licenses" = "MIT" } }
 
 [images.node-26]
 kind = "oci"
 parent = "debian"
-oci = { cmd = ["node"], labels = { "org.opencontainers.image.title" = "node", "org.opencontainers.image.description" = "Node.js 26 (LTS) from nodejs.org on Debian 13 (trixie), with SBOM, provenance and test records", "org.opencontainers.image.licenses" = "MIT" } }
+oci = { cmd = ["node"], labels = { "org.opencontainers.image.source" = "https://github.com/foreverworks/debian-oci-images", "org.opencontainers.image.title" = "node", "org.opencontainers.image.description" = "Node.js 26 (LTS) from nodejs.org on Debian 13 (trixie), with SBOM, provenance and test records", "org.opencontainers.image.licenses" = "MIT" } }
 
 [images.node-24]
 kind = "oci"
 parent = "debian"
-oci = { cmd = ["node"], labels = { "org.opencontainers.image.title" = "node", "org.opencontainers.image.description" = "Node.js 24 (LTS) from nodejs.org on Debian 13 (trixie), with SBOM, provenance and test records", "org.opencontainers.image.licenses" = "MIT" } }
+oci = { cmd = ["node"], labels = { "org.opencontainers.image.source" = "https://github.com/foreverworks/debian-oci-images", "org.opencontainers.image.title" = "node", "org.opencontainers.image.description" = "Node.js 24 (LTS) from nodejs.org on Debian 13 (trixie), with SBOM, provenance and test records", "org.opencontainers.image.licenses" = "MIT" } }
 
 [images.node-22]
 kind = "oci"
 parent = "debian"
-oci = { cmd = ["node"], labels = { "org.opencontainers.image.title" = "node", "org.opencontainers.image.description" = "Node.js 22 (LTS) from nodejs.org on Debian 13 (trixie), with SBOM, provenance and test records", "org.opencontainers.image.licenses" = "MIT" } }
+oci = { cmd = ["node"], labels = { "org.opencontainers.image.source" = "https://github.com/foreverworks/debian-oci-images", "org.opencontainers.image.title" = "node", "org.opencontainers.image.description" = "Node.js 22 (LTS) from nodejs.org on Debian 13 (trixie), with SBOM, provenance and test records", "org.opencontainers.image.licenses" = "MIT" } }
 
 [checks]
 default = ["builtin"]

@@ -11,6 +11,7 @@ Rules:
 - builder.ref names the tag v<lock's factory version> and a sha256 digest;
 - every node-<N> image of factory.toml has a lock entry node-<N> of Node.js N, used by that image only;
 - every oci image of factory.toml has a repository to be published to.
+- a `<scope>: write` permission appears only in the publish job of release.yml.
 
 Prints every problem found and exits 1, or prints nothing and exits 0.
 """
@@ -39,9 +40,37 @@ def _indent(line: str) -> int:
     return len(line) - len(line.lstrip(" "))
 
 
+WRITE_RE = re.compile(r"^\s*(?P<scope>[a-z-]+):\s*write(?:-all)?\s*(?:#.*)?$")
+JOB_RE = re.compile(r"^  (?P<job>[A-Za-z0-9_-]+):\s*(?:#.*)?$")
+WRITER = ("release.yml", "publish")  # the one job that may hold a write permission
+
+
+def check_write_permissions(name: str, text: str) -> list[str]:
+    """A `<scope>: write` permission anywhere but the publish job of release.yml. The jobs that build run
+    package scripts as root, so they must never hold a token that writes (DESIGN.md, section 6)."""
+    problems: list[str] = []
+    in_jobs = False
+    job: str | None = None
+    for number, line in enumerate(text.splitlines(), start=1):
+        if line and not line.startswith((" ", "#")):
+            in_jobs = line.rstrip() == "jobs:"
+            job = None
+        found = JOB_RE.match(line) if in_jobs else None
+        if found:
+            job = found.group("job")
+            continue
+        write = WRITE_RE.match(line)
+        if write and (Path(name).name, job) != WRITER:
+            where = "top level" if job is None else f"job {job}"
+            problems.append(
+                f"{name}:{number}: {write.group('scope')}: write in {where}: only the publish job of release.yml may write"
+            )
+    return problems
+
+
 def check_workflow(name: str, text: str) -> list[str]:
     """Problems in one workflow or action file, as `name:line: message`."""
-    problems: list[str] = []
+    problems: list[str] = check_write_permissions(name, text)
     lines = text.splitlines()
     block_indent: int | None = None  # the key column of the run: block we are inside
     for number, line in enumerate(lines, start=1):

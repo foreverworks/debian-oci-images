@@ -173,7 +173,8 @@ read its name.
 ## 6. Workflows
 
 All jobs run on GitHub-hosted `ubuntu-26.04` runners, and every Action is pinned by its full commit SHA
-with the version in a comment. Pull requests from forks need approval to run and get a read-only token;
+with the version in a comment. Pull requests from forks run only after a maintainer approves them (the repository requires approval
+for every outside contributor, a repository setting) and get a read-only token;
 no secret is available to them. The build runs package scripts in a privileged container (the factory
 runs the build in a container with no network; under a rootful Docker, `--privileged` is root on the host,
 factory DESIGN 5.4). The runner is a throwaway machine, and the one job that holds a write token never
@@ -222,13 +223,32 @@ On a push of a tag `v*`, which only maintainers create; the tag must be `vMAJOR.
 **Why two jobs.** The build runs package scripts as root in a privileged container. A job that does so
 must never hold a token that can write packages or releases, or sign as this repository: a hostile
 package script could use it. The second job holds the write permissions and runs only the factory's
-publish and verify, cosign and oras, on bytes the first job produced. The `release` environment is
-the place to hold a job until a person approves it.
+publish and verify, cosign and oras, on bytes the first job produced. The `release` environment accepts
+deployments from `v*` tags only, and a tag ruleset lets only repository administrators create, move or
+delete `v*` tags; both are repository settings (section 6.1). A `release.yml` on any other ref, or a tag
+someone without that role pushed, therefore never reaches the write permissions.
 
 **The order matters.** Tags move last. If the build fails, the checks fail, the verification fails or
 the signature fails, the old tags stay where they are and nothing a user pulls by tag has changed.
+Tags then move one image at a time: a failure inside that last loop leaves some images on new tags and
+some on old ones, and a re-run of the publish job completes the set (every step before it is idempotent).
 
 Nothing is published to any registry before the owner approves the first release tag.
+
+### 6.1 Repository settings the files cannot enforce
+
+- Actions: every Action pinned by full SHA (required), the workflow token read-only by default, and
+  approval required for every outside contributor's pull request.
+- Ruleset `protect main`: no deletion, no force push. Ruleset `release tags`: only repository
+  administrators create, update or delete tags matching `v*`.
+- Environment `release`: deployments only from tags matching `v*`.
+- Packages: after the first release, `ghcr.io/foreverworks/debian` and `ghcr.io/foreverworks/node` are
+  set to public by an administrator (a package GitHub creates from a workflow starts private), and an
+  anonymous `docker pull` is checked before the release is announced. The images carry
+  `org.opencontainers.image.source`, so GitHub links each package to this repository.
+- GitHub disables a scheduled workflow after 60 days without activity in the repository, and evicts a
+  cache entry unused for 7 days. The first costs nightly runs until someone re-enables it; the second only
+  makes the next night build everything again.
 
 ## 7. Signing and records
 

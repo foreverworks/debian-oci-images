@@ -111,6 +111,31 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(len(self.problems("    run: |\n      echo self-hosted\n")), 1)
 
 
+
+class WritePermissionTests(unittest.TestCase):
+    RELEASE = (
+        "permissions:\n  contents: read\njobs:\n  build:\n    permissions:\n      contents: read\n"
+        "  publish:\n    permissions:\n      contents: write # assets\n      packages: write\n      id-token: write\n"
+    )
+
+    def test_only_the_publish_job_of_release_may_write(self) -> None:
+        self.assertEqual(policy.check_write_permissions(".github/workflows/release.yml", self.RELEASE), [])
+
+    def test_the_same_job_elsewhere_may_not(self) -> None:
+        self.assertEqual(len(policy.check_write_permissions(".github/workflows/ci.yml", self.RELEASE)), 3)
+
+    def test_a_build_job_may_not(self) -> None:
+        text = "jobs:\n  build:\n    permissions:\n      packages: write\n"
+        problems = policy.check_write_permissions("release.yml", text)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("release.yml:4", problems[0])
+        self.assertIn("job build", problems[0])
+
+    def test_top_level_may_not(self) -> None:
+        for text in ("permissions:\n  contents: write\n", "permissions: write-all\n"):
+            with self.subTest(text=text):
+                self.assertEqual(len(policy.check_write_permissions("release.yml", text)), 1)
+
 class BuilderRefTests(unittest.TestCase):
     REF = "ghcr.io/example/builder:v0.6.2@sha256:" + "c" * 64
 

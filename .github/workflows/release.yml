@@ -125,9 +125,10 @@ jobs:
         with:
           version: 1.4.0
 
-      - name: The factory release the repository pins, signature verified
+      - name: The factory release the repository pins, signature verified, without the builder (this job never builds)
         env:
           FACTORY_COSIGN: required
+          FACTORY_BUILDER: skip
         run: scripts/factory install
 
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
