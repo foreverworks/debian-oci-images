@@ -1,0 +1,72 @@
+#!/bin/sh
+# Publish a tested build output: every OCI image to its repository, the core tarball to a GitHub
+# release, then verify each pushed image against its records, sign its digest and move its tags.
+#
+#   scripts/release OUT REGISTRY
+#
+# OUT is the directory `build` and `test` wrote (plan.json, the artifacts, their records). REGISTRY is
+# where the repositories live, ghcr.io/foreverworks in the release workflow. Nothing moves a tag until
+# every image is published and has verified, so a failure leaves the tags where they were.
+#
+# Environment:
+#   SIGN      keyless: cosign signs each image digest with the workflow's identity; none: no signature
+#             (local runs against a test registry). Default keyless.
+#   RELEASE   a github-release://OWNER/REPO@TAG target for the core tarball and its records, or empty.
+#   PLAIN_HTTP  1 for a registry on 127.0.0.1 without TLS (oras needs to be told; the factory knows).
+#   LOCK, DEFINITION  default lock.json and factory.toml.
+set -eu
+
+[ "$#" -eq 2 ] || { echo "usage: scripts/release OUT REGISTRY" >&2; exit 2; }
+out=$1
+registry=$2
+here=$(dirname "$0")
+lock=${LOCK:-lock.json}
+definition=${DEFINITION:-factory.toml}
+sign=${SIGN:-keyless}
+case "$sign" in
+  keyless | none) ;;
+  *) echo "release: SIGN is keyless or none, not '$sign'" >&2; exit 2 ;;
+esac
+oras_flags=""
+[ "${PLAIN_HTTP:-0}" != 1 ] || oras_flags="--plain-http"
+
+[ -f "$out/plan.json" ] || { echo "release: $out/plan.json is missing: run build and test first" >&2; exit 1; }
+# Beside OUT, on its file system: the stage below is made of hard links into OUT.
+work=$(mktemp -d "$(dirname "$out")/release.XXXXXX")
+trap 'rm -rf "$work"' EXIT
+python3 "$here/images.py" layouts "$out" > "$work/layouts"
+[ -s "$work/layouts" ] || { echo "release: $out holds no OCI images" >&2; exit 1; }
+
+# INTERIM (factory gap 1, DESIGN.md section 8): the factory pushes every image of a directory to each
+# oci:// target, so each repository gets a directory of its own, made of hard links. Once the factory
+# can publish selected images, this becomes one `publish --image` per repository.
+python3 "$here/images.py" stage "$out" "$work/stage" > "$work/repositories"
+while read -r repository dir; do
+  "$here/factory" publish "$dir" --to "oci://$registry/$repository" < /dev/null
+done < "$work/repositories"
+
+if [ -n "${RELEASE:-}" ]; then
+  "$here/factory" publish "$out" --to "$RELEASE"
+fi
+
+# Every image as the registry now holds it must verify against its records, with every check the
+# definition requires passing, before anything is signed or tagged.
+while read -r image digest _layout _records; do
+  repository=$(python3 "$here/images.py" repository "$image" < /dev/null)
+  "$here/factory" verify "oci://$registry/$repository@$digest" --require-checks --lock "$lock" --definition "$definition" < /dev/null
+done < "$work/layouts"
+
+if [ "$sign" = keyless ]; then
+  while read -r image digest _layout _records; do
+    repository=$(python3 "$here/images.py" repository "$image" < /dev/null)
+    cosign sign --yes "$registry/$repository@$digest" < /dev/null
+  done < "$work/layouts"
+fi
+
+while read -r image digest _layout _records; do
+  repository=$(python3 "$here/images.py" repository "$image" < /dev/null)
+  python3 "$here/images.py" tags "$image" --lock "$lock" --definition "$definition" < /dev/null > "$work/tags"
+  # shellcheck disable=SC2046,SC2086 # one argument per tag; oras_flags is empty or one flag
+  oras tag $oras_flags "$registry/$repository@$digest" $(cat "$work/tags") < /dev/null
+  echo "$registry/$repository@$digest: $(tr '\n' ' ' < "$work/tags")"
+done < "$work/layouts"

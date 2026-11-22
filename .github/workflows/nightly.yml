@@ -1,0 +1,128 @@
+# Every night: plan at the newest completed Debian snapshot against a target that persists between
+# nights, and build, test and keep only what the plan says changed. A night with no relevant upload
+# builds nothing (changed=false) and costs a few index downloads.
+#
+# The target lives in the Actions cache: a zot registry on 127.0.0.1 for the OCI images and a dir://
+# directory for core. The newest `nightly-` entry is restored, and a night that built something prunes
+# the target and saves a new entry. Nothing is published to any public registry from here
+# (DESIGN.md, section 6).
+name: nightly
+
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+env:
+  ZOT: ghcr.io/project-zot/zot@sha256:9d3de83ac2099e6f4843045b4c9b65b7e8baf40f92d28f54906dee9d4d390fd7 # v2.1.23
+  REGISTRY: 127.0.0.1:5000
+
+jobs:
+  nightly:
+    name: plan at the newest snapshot, build what changed
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: System packages (apt, gpgv and Debian's archive keyring, which planning needs)
+        run: |
+          set -eu
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends apt gpgv debian-archive-keyring curl
+          test -s /usr/share/keyrings/debian-archive-keyring.pgp
+          docker info > /dev/null
+
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+        with:
+          cosign-release: v3.1.4
+
+      - name: The factory release and builder the repository pins, signatures verified
+        env:
+          FACTORY_COSIGN: required
+        run: scripts/factory install
+
+      - name: Restore the target the last night that built something saved
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .nightly
+          key: nightly-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: nightly-
+
+      - name: Start the registry the target's OCI images live in
+        run: |
+          set -eu
+          mkdir -p .nightly/registry .nightly/core work
+          docker run --detach --user "$(id -u):$(id -g)" --publish "$REGISTRY:5000" \
+            --volume "$PWD/.nightly/registry:/var/lib/registry" "$ZOT" > work/zot.cid
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            curl --silent --fail "http://$REGISTRY/v2/" > /dev/null && exit 0
+            sleep 2
+          done
+          docker logs "$(cat work/zot.cid)"
+          exit 1
+
+      - name: Plan at the newest snapshot
+        id: plan
+        run: |
+          set -eu
+          scripts/factory plan --snapshot latest \
+            --against "oci://$REGISTRY/images" --against "dir://$PWD/.nightly/core" --out work/plan.json
+          python3 scripts/images.py plan work/plan.json | tee work/states.txt
+          grep '^changed=' work/states.txt >> "$GITHUB_OUTPUT"
+
+      - name: Fetch what the plan builds from
+        if: steps.plan.outputs.changed == 'true'
+        run: scripts/factory fetch work/plan.json
+
+      - name: Build what changed, reading reused parents from the target
+        if: steps.plan.outputs.changed == 'true'
+        run: |
+          scripts/factory build work/plan.json --out work/out \
+            --parents "oci://$REGISTRY/images" --parents "dir://$PWD/.nightly/core"
+
+      - name: Test what was built
+        if: steps.plan.outputs.changed == 'true'
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: scripts/factory test work/out --url "$RUN_URL"
+
+      # One local repository holds every OCI image: this target is a cache for planning, never a
+      # publication, so the per-repository split of the release does not apply.
+      - name: Keep it in the target, then prune the target
+        if: steps.plan.outputs.changed == 'true'
+        run: |
+          set -eu
+          scripts/factory publish work/out --to "oci://$REGISTRY/images" --to "dir://$PWD/.nightly/core"
+          scripts/factory prune --against "oci://$REGISTRY/images" --against "dir://$PWD/.nightly/core" \
+            --definition factory.toml
+
+      - name: Stop the registry
+        if: always()
+        run: |
+          [ ! -s work/zot.cid ] || docker stop "$(cat work/zot.cid)" > /dev/null
+
+      - name: Save the target
+        if: steps.plan.outputs.changed == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .nightly
+          key: nightly-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: What the night did
+        if: always()
+        run: |
+          {
+            echo '```'
+            cat work/states.txt 2> /dev/null || echo "no plan"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

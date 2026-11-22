@@ -1,0 +1,132 @@
+# Every push to main and every pull request: the static checks, then a build and test of every image
+# from the lock's own snapshot. Nothing is published, and no job here holds a write token.
+#
+# GitHub-hosted runners only. Pull requests from forks run after a maintainer approves them, with the
+# read-only token this file asks for (DESIGN.md, section 6).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  ACTIONLINT_VERSION: "1.7.12"
+  ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+
+jobs:
+  static:
+    name: static checks
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: System packages (shellcheck, and apt, gpgv and Debian's archive keyring for lock check)
+        run: |
+          set -eu
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends shellcheck apt gpgv debian-archive-keyring curl
+          test -s /usr/share/keyrings/debian-archive-keyring.pgp
+
+      - name: mypy, pinned by hash
+        run: |
+          set -eu
+          python3 -m venv "$RUNNER_TEMP/dev"
+          "$RUNNER_TEMP/dev/bin/pip" install --quiet --require-hashes -r requirements-dev.txt
+          echo "$RUNNER_TEMP/dev/bin" >> "$GITHUB_PATH"
+
+      - name: actionlint, checked against its sha256
+        run: |
+          set -eu
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' --retry 3 \
+            --output "$RUNNER_TEMP/$tarball" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$tarball"
+          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$RUNNER_TEMP/$tarball" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP/bin" actionlint
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: scripts/check
+        run: scripts/check
+
+  images:
+    name: build and test every image
+    needs: static
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: System packages (apt, gpgv and Debian's archive keyring, which planning needs)
+        run: |
+          set -eu
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends apt gpgv debian-archive-keyring curl
+          test -s /usr/share/keyrings/debian-archive-keyring.pgp
+          docker info > /dev/null
+
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+        with:
+          cosign-release: v3.1.4
+
+      - name: The factory release and builder the repository pins, signatures verified
+        env:
+          FACTORY_COSIGN: required
+        run: scripts/factory install
+
+      - name: Plan at the lock's snapshot (no target, so every image builds)
+        id: plan
+        run: |
+          set -eu
+          mkdir -p work
+          scripts/factory plan --snapshot lock --out work/plan.json
+          python3 scripts/images.py plan work/plan.json | tee work/states.txt
+          grep '^changed=' work/states.txt >> "$GITHUB_OUTPUT"
+
+      - name: Fetch, verified against the snapshot's signed indices and the lock
+        run: scripts/factory fetch work/plan.json
+
+      - name: Build, offline, in the pinned builder
+        run: scripts/factory build work/plan.json --out work/out
+
+      - name: Test every image with the factory's built-in checks
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: scripts/factory test work/out --url "$RUN_URL"
+
+      - name: Verify every image against its records, every required check passing
+        run: |
+          set -eu
+          python3 scripts/images.py layouts work/out > work/layouts.txt
+          for core in work/out/core-*.tar.gz; do
+            echo "== core"
+            scripts/factory verify "$core" --require-checks --lock lock.json --definition factory.toml
+          done
+          while read -r image _digest layout _records; do
+            echo "== $image"
+            scripts/factory verify "work/out/$layout" --require-checks --lock lock.json --definition factory.toml < /dev/null
+          done < work/layouts.txt
+
+      - name: What was built
+        if: always()
+        run: |
+          {
+            echo '```'
+            cat work/states.txt 2> /dev/null || echo "no plan"
+            echo
+            cat work/layouts.txt 2> /dev/null || echo "no images"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
