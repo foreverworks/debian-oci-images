@@ -6,9 +6,9 @@
 #   build    plans the whole chain at the lock's snapshot, builds, tests and verifies every image,
 #            with a read-only token, and hands the output on as a workflow artifact;
 #   publish  pushes debian to ghcr.io/foreverworks/debian and node-* to ghcr.io/foreverworks/node with
-#            their records, the core tarball to this tag's GitHub release, verifies every pushed image
-#            with all of its required checks, signs each digest keyless with Sigstore and only then
-#            moves the tags.
+#            their records, verifies every pushed image with all of its required checks, then puts the
+#            core tarball on this tag's GitHub release and verifies it there, signs each image digest
+#            keyless with Sigstore and only then moves the tags (scripts/release).
 #
 # The build is the whole chain on purpose: the factory cannot yet check a child's ancestry against a
 # parent it reuses from a registry (DESIGN.md, section 8).
