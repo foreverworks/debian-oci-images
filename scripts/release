@@ -53,7 +53,7 @@ fi
 # definition requires passing, before anything is signed or tagged.
 while read -r image digest _layout _records; do
   repository=$(python3 "$here/images.py" repository "$image" < /dev/null)
-  "$here/factory" verify "oci://$registry/$repository@$digest" --require-checks --lock "$lock" --definition "$definition" < /dev/null
+  "$here/factory" verify "oci://$registry/$repository@$digest" --pull --require-checks --lock "$lock" --definition "$definition" < /dev/null
 done < "$work/layouts"
 
 if [ "$sign" = keyless ]; then

@@ -24,7 +24,7 @@ Non-goals:
   provenance and the test records. Nothing here resolves a package, writes a layer or composes a
   record. If a behaviour is missing, the fix goes into the factory (section 8), and this repository
   carries an interim glue script that is marked as such and removed when the factory catches up.
-- **No images for odd-numbered (Current) Node.js lines**, no application images and no variants (slim,
+- **No images for Node.js lines before they reach LTS** (the Current phase), no application images and no variants (slim,
   alpine, with build tools). Every image has to be worth auditing, and each one costs a nightly build.
 - **No byte-for-byte reproducibility promise.** The inputs are reproducible; the output digest is not
   promised to be.
@@ -56,8 +56,8 @@ by digest, and there is no step between "the rootfs we tested" and "the layer yo
 `/bin/bash` and it sets `LANG=C.UTF-8`.
 
 **Node.js from nodejs.org tarballs, not Debian's `nodejs` package.** Debian packages one Node.js
-major for a whole release and keeps it for the life of that release, while upstream cuts a new major every
-April, promotes the even-numbered one to LTS in October and supports it for about three years. An image
+major for a whole release and keeps it for the life of that release, while upstream cuts new majors on its own
+schedule, promotes them to LTS in October and supports each LTS line for about two and a half years. An image
 for "the active LTS" and one for each maintenance LTS that upstream still supports needs the upstream builds. The cost is that the
 tarball is not covered by Debian's archive signature, so the factory's `builtin:node-tarball` module
 checks it at fetch against Node.js's signed `SHASUMS256.txt.asc`, with the release keyring pinned in
@@ -76,7 +76,9 @@ the next Dockerfile. The Node.js images start `node`, so `docker run image scrip
 
 **Node.js policy.** Every Node.js LTS line still supported upstream has an image. A line is added by
 hand when it becomes LTS (in October of its year), and removed on its end-of-life date, from the
-[nodejs/release schedule](https://github.com/nodejs/release). Odd (Current) lines get no image.
+[nodejs/release schedule](https://github.com/nodejs/release). A line in its Current phase gets no image.
+From Node.js 27 on, upstream makes every major an LTS line (the schedule gives 27 LTS on 2027-10-20),
+so "even numbers only" is not a rule here: the schedule is.
 
 State at 2026-11-22:
 
@@ -157,8 +159,9 @@ its builder (section 8, gap 4), the Action can be used, and `builder.ref` and `s
 
 **Who moves them, and when.** Only `release.yml`, and only after the image's required checks have all
 passed, its records verify and its digest is signed (section 6). Nothing else, a person included, moves a
-friendly tag. The identity tag is not friendly: it means one set of inputs, and the factory moves it to
-the latest build for those inputs when a failed build is replaced.
+friendly tag. The identity tag is not friendly: it names one set of inputs. While the release rebuilds the
+whole chain (section 8, gap 2), a release that rebuilds an image whose inputs did not change pushes a new
+digest under the same identity tag: the bytes differ only in the commit annotation (factory DESIGN 5.3).
 
 **Why `latest` and `lts` are both on the newest LTS.** Users who pick no tag get the newest supported
 line, and users who want "whatever is LTS" get it. A major that stops being the active LTS loses these
@@ -204,7 +207,7 @@ The cache stands in for the registry because the real target does not exist befo
 
 ### release.yml
 
-On a push of a tag `v*`, which only the owner creates. Two jobs, with permissions split:
+On a push of a tag `v*`, which only maintainers create; the tag must be `vMAJOR.MINOR.PATCH` on `main`. Two jobs, with permissions split:
 
 1. **build**: read-only token. Builds and tests everything and uploads the output as an artifact.
 2. **publish**: `packages: write`, `contents: write` and `id-token: write`, in the environment `release`.
@@ -288,9 +291,14 @@ deleting the interim code in the same pull request, never by leaving both.
 - **Nightly planning against `ghcr.io`.** Today the nightly plans against a cache, because nothing exists
   on the registry. Once the first release exists, the nightly can ask `ghcr.io` which identities are
   already published and build only what a release would add, as the factory's design intends.
-- **New LTS lines.** Node.js 28 becomes LTS in October 2027. It gets a block in `factory.toml`, an entry
+- **New LTS lines.** Node.js 27 is scheduled to become LTS on 2027-10-20 (nodejs/release schedule). It gets a block in `factory.toml`, an entry
   in the lock and a row in the tables, as a reviewed change.
 - **Signed records**, when the factory supports them (section 8, gap 3).
+- **Checksums on Renovate branches.** The input-lock Renovate preset expects an Action that commits the
+  new checksum of a bumped entry to Renovate's branch. This repository has none yet, so a Node.js or
+  factory bump arrives with the old sha256 and CI's `fetch` fails, safely, until a maintainer runs
+  `scripts/factory lock checksums --base origin/main` on the branch (it checks Node.js's signed list
+  first). A workflow that does this on Renovate's own branches is the next step.
 
 ## 10. Checks this repository adds
 
@@ -302,8 +310,11 @@ them and is what CI runs first:
   and are pure functions over explicit state, with dataclasses and named tuples for data;
 - **unit tests** for the scripts;
 - **`policy.py`**, which enforces this repository's rules, among them that `builder.ref` is one line whose
-  tag equals the lock's factory version, that workflows run only on `ubuntu-26.04` and that every Action is
-  pinned by a full commit SHA with a version comment;
+  tag equals the lock's factory version, that workflows run only on `ubuntu-26.04` (no self-hosted label,
+  no switch on the repository's visibility), that every Action is pinned by a full commit SHA with a
+  version comment, that no `${{ }}` expression appears inside a `run:` script, that every `node-<N>`
+  image has a lock entry of major N used by that image alone, and that every OCI image maps to a
+  repository;
 - **actionlint** on the workflows;
 - **the lock check**: `lock check` of the factory, which re-resolves the snapshot and confirms that the
   lock and the definition agree.

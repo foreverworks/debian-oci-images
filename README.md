@@ -42,7 +42,7 @@ All images are `linux/amd64`. The factory that builds them supports only amd64 t
 the architecture in every image identity so others can follow; arm64 is later work.
 
 Every supported Node.js LTS line has an image. A line is added when it becomes LTS and removed on its
-end-of-life date. Odd-numbered (Current) lines get none. The reasoning is in
+end-of-life date. A line still in its Current phase gets none. The reasoning is in
 [DESIGN.md](DESIGN.md#3-versions).
 
 The images run as `root` by default, as the official Debian image does. Set `USER` in your own
@@ -65,7 +65,7 @@ By tag, to try it:
 
 ```sh
 docker pull ghcr.io/foreverworks/node:26
-docker run --rm ghcr.io/foreverworks/node:26 --version
+docker run --rm ghcr.io/foreverworks/node:26 node --version
 ```
 
 By digest, for anything you ship:
@@ -105,10 +105,15 @@ cosign verify ghcr.io/foreverworks/node@sha256:<digest> \
 
 The records are checked by the factory itself. Take its `.pyz` from the
 [v0.6.2 release](https://github.com/foreverworks/debian-image-factory/releases/tag/v0.6.2), check its
-sha256 against `lock.json` in this repository (and its Sigstore bundle against the release's
-signature), then, from a checkout of this repository at the release tag:
+sha256 against `lock.json` in this repository and its Sigstore bundle, then, from a checkout of
+this repository at the release tag:
 
 ```sh
+sha256sum debian-image-factory-0.6.2.pyz   # f718b927fac4a3159cf75a62e3ce657a9c87e851fc5097b553198b360534ce00
+cosign verify-blob debian-image-factory-0.6.2.pyz \
+  --bundle debian-image-factory-0.6.2.pyz.sigstore.json \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity https://github.com/foreverworks/debian-image-factory/.github/workflows/release.yml@refs/tags/v0.6.2
 python3 debian-image-factory-0.6.2.pyz verify \
   oci://ghcr.io/foreverworks/node@sha256:<digest> \
   --pull --require-checks --lock lock.json --definition factory.toml
@@ -152,7 +157,7 @@ Two limits are worth knowing:
 SLSA Build L1 means the provenance exists and says what the build used. Build L2 needs a build platform
 that generates and signs the provenance on its own, and L3 needs a hardened, isolated platform. The
 factory's own wording is in its
-[DESIGN, section 8.3](https://github.com/foreverworks/debian-image-factory/blob/main/DESIGN.md).
+[DESIGN, section 8.3](https://github.com/foreverworks/debian-image-factory/blob/v0.6.2/DESIGN.md).
 
 ## How the images stay current
 
@@ -179,13 +184,13 @@ cd debian-oci-images
 scripts/factory install                 # downloads the pinned factory and checks its sha256
 scripts/factory plan --out plan.json    # which images need building, at the lock's snapshot
 scripts/factory fetch plan.json         # downloads and verifies every input
-scripts/factory build plan.json --out out/ --builder-image "$(cat builder.ref)"
+scripts/factory build plan.json --out out/   # in the builder that builder.ref pins by digest
 scripts/factory test out/               # runs the built-in checks on every image
-scripts/factory verify <layout in out/> --require-checks --lock lock.json --definition factory.toml
+scripts/factory verify out/node-26-trixie-amd64-*.oci --require-checks --lock lock.json --definition factory.toml
 ```
 
 `scripts/factory` refuses any factory bytes other than the ones in `lock.json`, and passes everything
-else to it. The factory's [command line reference](https://github.com/foreverworks/debian-image-factory/blob/main/DESIGN.md)
+else to it. The factory's [command line reference](https://github.com/foreverworks/debian-image-factory/blob/v0.6.2/DESIGN.md)
 (section 9.1) lists every option. The factory builds everything from this repository's definition, and
 nothing here runs a package script on your machine outside the builder container.
 

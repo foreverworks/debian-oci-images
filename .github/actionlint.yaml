@@ -1,0 +1,5 @@
+# actionlint 1.7.12 predates the ubuntu-26.04 label. It is a GitHub-hosted runner (actions/runner-images),
+# not a self-hosted one: this repository runs on GitHub-hosted runners only (scripts/policy.py checks it).
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
