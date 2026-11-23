@@ -1,5 +1,8 @@
 {
-  "debian_snapshot": "20261121T203158Z",
+  "debian_snapshots": {
+    "debian": "20261121T203158Z",
+    "debian-security": "20261121T005332Z"
+  },
   "inputs": {
     "debian-image-factory": {
       "datasource": "github-releases",
@@ -62,5 +65,5 @@
       "version": "481637f813e912c4aa3622d7964ab426c97b8e8d"
     }
   },
-  "schema": 2
+  "schema": 3
 }

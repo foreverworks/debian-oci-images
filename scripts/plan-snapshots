@@ -1,0 +1,120 @@
+#!/bin/sh
+# Plan at the newest snapshot of each Debian archive against what the last release published, for
+# snapshot.yml, and say which snapshot of each archive the plan used.
+#
+#   scripts/plan-snapshots OUT
+#
+# OUT is a directory for the results: plan.json, states.txt (what images.py prints), outputs.txt
+# (lines for $GITHUB_OUTPUT: changed, debian, debian_security) and summary.md.
+#
+# Environment:
+#   REPO      owner/name of this repository (required)
+#   TAG       the newest release's tag, whose core tarball the plan compares against (required)
+#   ARCHIVE   debian or debian-security: the archive of ASKED, default debian-security
+#   ASKED     the newest snapshot the caller saw, YYYYMMDDTHHMMSSZ, or empty
+#   FACTORY   the factory command, default scripts/factory (the tests put a stub here)
+#   MAX_WAIT  seconds to keep retrying a plan that failed, default 600
+#   PAUSE     seconds between two tries, default 60
+#
+# `plan --snapshot latest` reads the service's listing, which it caches for up to ten minutes, so it may
+# not show the snapshot the caller saw yet. A snapshot named explicitly is confirmed by a read that
+# bypasses the cache, so when the caller's snapshot is newer than the listing's, this plans again at once
+# with the caller's snapshot for its archive and the listing's for the other. A plan that fails (a
+# mirror that does not serve a listed snapshot's files yet, a rate limit) is tried again, a minute
+# apart, until MAX_WAIT is used up, and then fails with the last error.
+set -eu
+
+[ "$#" -eq 1 ] || { echo "usage: scripts/plan-snapshots OUT" >&2; exit 2; }
+out=$1
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+: "${REPO:?REPO is required}" "${TAG:?TAG is required}"
+archive=${ARCHIVE:-debian-security}
+asked=${ASKED:-}
+factory=${FACTORY:-$here/factory}
+max_wait=${MAX_WAIT:-600}
+pause=${PAUSE:-60}
+
+case "$archive" in
+debian | debian-security) ;;
+*) echo "plan-snapshots: ARCHIVE is debian or debian-security, not $archive" >&2; exit 2 ;;
+esac
+if [ -n "$asked" ]; then
+    printf '%s\n' "$asked" | grep -Eq '^[0-9]{8}T[0-9]{6}Z$' || {
+        echo "plan-snapshots: ASKED is not YYYYMMDDTHHMMSSZ" >&2
+        exit 2
+    }
+fi
+
+mkdir -p "$out"
+start=$(date +%s)
+
+# Does snapshot ID $1 come after $2? The IDs have a fixed width, so the sort order is the time order.
+is_newer() {
+    [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | LC_ALL=C sort | tail -n 1)" = "$1" ]
+}
+
+# plan SNAPSHOT_ARG: write $out/plan.json, trying again while the plan fails, until max_wait is used up.
+plan() {
+    attempt=1
+    while :; do
+        if "$factory" plan --snapshot "$1" \
+            --against oci://ghcr.io/foreverworks/debian --against oci://ghcr.io/foreverworks/node \
+            --against "github-release://$REPO@$TAG" --out "$out/plan.json"; then
+            return 0
+        fi
+        elapsed=$(($(date +%s) - start))
+        if [ "$elapsed" -ge "$max_wait" ]; then
+            echo "plan-snapshots: the plan at '$1' still fails after $attempt attempts and $elapsed s: a snapshot that is listed but whose files a mirror does not serve yet, or a rate limit" >&2
+            return 1
+        fi
+        echo "the plan at '$1' failed (attempt $attempt, $elapsed s in): planning again in $pause s" >&2
+        attempt=$((attempt + 1))
+        sleep "$pause"
+    done
+}
+
+# id_of ARCHIVE: that archive's snapshot in plan.json, which must be a snapshot ID.
+id_of() {
+    id=$(jq -r --arg archive "$1" '.snapshots[$archive] // empty' "$out/plan.json")
+    printf '%s\n' "$id" | grep -Eq '^[0-9]{8}T[0-9]{6}Z$' || {
+        echo "plan-snapshots: the plan's snapshot for $1 is '$id'" >&2
+        return 1
+    }
+    printf '%s\n' "$id"
+}
+
+plan latest
+debian=$(id_of debian)
+security=$(id_of debian-security)
+note=
+
+if [ -n "$asked" ]; then
+    if [ "$archive" = debian ]; then listed=$debian; else listed=$security; fi
+    if is_newer "$asked" "$listed"; then
+        echo "the listing shows $archive at $listed, older than the $asked the caller saw: planning at $asked now"
+        if [ "$archive" = debian ]; then
+            pinned="debian=$asked,debian-security=$security"
+        else
+            pinned="debian=$debian,debian-security=$asked"
+        fi
+        plan "$pinned"
+        debian=$(id_of debian)
+        security=$(id_of debian-security)
+        note="The listing showed $archive at $listed, older than the $asked the caller saw, so the plan was repeated at $pinned."
+    fi
+fi
+
+python3 "$here/images.py" plan "$out/plan.json" > "$out/states.txt"
+cat "$out/states.txt"
+grep '^changed=' "$out/states.txt" > "$out/outputs.txt"
+{
+    echo "debian=$debian"
+    echo "debian_security=$security"
+} >> "$out/outputs.txt"
+{
+    echo "Planned at debian $debian and debian-security $security against release $TAG:"
+    echo '```'
+    cat "$out/states.txt"
+    echo '```'
+    [ -z "$note" ] || echo "$note"
+} > "$out/summary.md"

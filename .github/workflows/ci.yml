@@ -1,5 +1,5 @@
 # Every push to main and every pull request: the static checks, and beside them a build and test of
-# every image from the lock's own snapshot. The two jobs do not depend on each other, so they run side
+# every image from the lock's own snapshots. The two jobs do not depend on each other, so they run side
 # by side and a failure of either shows at once. Nothing is published, and no job here holds a write
 # token.
 #
@@ -89,7 +89,7 @@ jobs:
           FACTORY_COSIGN: required
         run: scripts/factory install
 
-      - name: Plan at the lock's snapshot (no target, so every image builds)
+      - name: Plan at the lock's snapshots (no target, so every image builds)
         id: plan
         run: |
           set -eu

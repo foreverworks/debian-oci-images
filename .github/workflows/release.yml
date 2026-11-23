@@ -5,7 +5,7 @@
 #
 # Two jobs, so the job that runs Debian's package scripts as root in a privileged builder never holds a
 # write token (DESIGN.md, section 6):
-#   build    plans the whole chain at the lock's snapshot, builds, tests and verifies every image,
+#   build    plans the whole chain at the lock's snapshots, builds, tests and verifies every image,
 #            with a read-only token, and hands the output on as a workflow artifact;
 #   publish  pushes debian to ghcr.io/foreverworks/debian and node-* to ghcr.io/foreverworks/node with
 #            their records (one publish --image per repository), verifies every pushed image with all
@@ -14,8 +14,8 @@
 #            (scripts/release).
 #
 # The build is the whole chain on purpose, whatever the registry holds: a release is one set of images
-# at one snapshot, and an image reused from an earlier release would carry a tag that names a snapshot
-# it was not built at. The factory can reuse one (`test --parents` reads a parent from a
+# at one pair of snapshots, and an image reused from an earlier release would carry a tag that names
+# snapshots it was not built at. The factory can reuse one (`test --parents` reads a parent from a
 # registry); this repository chooses not to (DESIGN.md, section 6).
 name: release
 
@@ -67,7 +67,7 @@ jobs:
           FACTORY_COSIGN: required
         run: scripts/factory install
 
-      - name: Plan at the lock's snapshot
+      - name: Plan at the lock's snapshots
         run: |
           set -eu
           mkdir -p work

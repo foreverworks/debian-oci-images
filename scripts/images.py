@@ -32,6 +32,9 @@ HEX_RE = re.compile(r"[0-9a-f]+")
 ARTIFACT_RE = re.compile(r"sha256:[0-9a-f]{64}")
 """How plan.json names an artifact since factory 0.6.3, always."""
 PLAN_STATES = ("build", "reuse", "wait")
+ARCHIVES = ("debian", "debian-security")
+"""The snapshot.debian.org archives the lock pins, each at its own snapshot, in tag order."""
+SNAPSHOT_ID_RE = re.compile(r"[0-9]{8}T[0-9]{6}Z")
 
 
 class ImageError(Exception):
@@ -112,17 +115,30 @@ def node_version(lock: Mapping[str, object], image: str, major: int) -> str:
     return version
 
 
+def snapshot_ids(lock: Mapping[str, object]) -> dict[str, str]:
+    """The lock's snapshot ID of each archive in ARCHIVES, checked for its format."""
+    table = lock.get("debian_snapshots")
+    if not isinstance(table, dict):
+        raise ImageError("the lock has no debian_snapshots")
+    ids: dict[str, str] = {}
+    for archive in ARCHIVES:
+        value = table.get(archive)
+        if not isinstance(value, str) or SNAPSHOT_ID_RE.fullmatch(value) is None:
+            raise ImageError(f"debian_snapshots.{archive} is not a YYYYMMDDTHHMMSSZ snapshot ID")
+        ids[archive] = value
+    return ids
+
+
 def tags_of(
     image: str, lock: Mapping[str, object], definition: Mapping[str, object]
 ) -> list[str]:
     """The friendly tags of an image, in a fixed order. The identity tag is the factory's own."""
     suite = suite_of(definition)
     if image == "debian":
-        snapshot = lock.get("debian_snapshot")
-        if not isinstance(snapshot, str) or not snapshot:
-            raise ImageError("the lock has no debian_snapshot")
+        ids = snapshot_ids(lock)
         debian_major = DEBIAN_MAJOR[suite]
-        return [debian_major, suite, "latest", f"{debian_major}-{snapshot}"]
+        built_at = "-".join(ids[archive] for archive in ARCHIVES)
+        return [debian_major, suite, "latest", f"{debian_major}-{built_at}"]
     match = NODE_IMAGE_RE.fullmatch(image)
     if match is None:
         repository_of(image)  # names the problem for core and for unknown images

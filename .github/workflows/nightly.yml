@@ -1,4 +1,4 @@
-# Every night: plan at the newest completed Debian snapshot against a target that persists between
+# Every night: plan at the newest completed snapshot of each Debian archive against a target that persists between
 # nights, and build, test and keep only what the plan says changed. A night with no relevant upload
 # builds nothing (changed=false) and costs a few index downloads.
 #
@@ -71,7 +71,7 @@ jobs:
           docker logs "$(cat work/zot.cid)"
           exit 1
 
-      - name: Plan at the newest snapshot
+      - name: Plan at the newest snapshots
         id: plan
         run: |
           set -eu

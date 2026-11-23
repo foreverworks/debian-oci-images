@@ -10,7 +10,8 @@ Rules:
 - no `${{` expression inside a `run:` (pass values through env: instead);
 - builder.ref names the tag v<lock's factory version> and a sha256 digest;
 - every node-<N> image of factory.toml has a lock entry node-<N> of Node.js N, used by that image only;
-- every oci image of factory.toml has a repository to be published to.
+- every oci image of factory.toml has a repository to be published to;
+- the lock pins a snapshot for each Debian archive (debian and debian-security), in the snapshot ID format.
 - a `<scope>: write` permission appears only in the publish job of release.yml, the checksums job of
   renovate-checksums.yml (contents and actions only), the tag job of release-next.yml (contents and
   actions only) and the feed job of snapshot.yml (contents only) and its ask-renovate job (issues only).
@@ -158,6 +159,15 @@ def check_definition(definition: Mapping[str, object], lock: Mapping[str, object
     return problems
 
 
+def check_snapshots(lock: Mapping[str, object]) -> list[str]:
+    """The lock pins one well-formed snapshot ID for each Debian archive."""
+    try:
+        images.snapshot_ids(lock)
+    except images.ImageError as error:
+        return [str(error)]
+    return []
+
+
 def workflow_files(root: Path) -> list[Path]:
     github = root / ".github"
     found = [*github.glob("workflows/*.yml"), *github.glob("workflows/*.yaml")]
@@ -173,6 +183,7 @@ def check_repository(root: Path) -> list[str]:
         lock = lockpin.load_lock(root / "lock.json")
         definition = images.load_definition(root / "factory.toml")
         problems += check_definition(definition, lock)
+        problems += check_snapshots(lock)
         problems += check_builder_ref((root / "builder.ref").read_text(encoding="utf-8"), lock)
     except (lockpin.LockError, images.ImageError, OSError) as error:
         problems.append(str(error))

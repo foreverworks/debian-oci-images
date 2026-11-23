@@ -51,7 +51,10 @@ def lock(**node: object) -> dict[str, object]:
         "used_by": ["node-26"],
     }
     entry.update(node)
-    return {"inputs": {"debian-image-factory": FACTORY_ENTRY, "node-26": entry}}
+    return {
+        "debian_snapshots": {"debian": "20261121T203158Z", "debian-security": "20261121T005332Z"},
+        "inputs": {"debian-image-factory": FACTORY_ENTRY, "node-26": entry},
+    }
 
 
 class WorkflowTests(unittest.TestCase):
@@ -180,6 +183,19 @@ class WritePermissionTests(unittest.TestCase):
     def test_the_plan_job_of_snapshot_may_not_write(self) -> None:
         text = "jobs:\n  plan:\n    permissions:\n      contents: write\n"
         self.assertEqual(len(policy.check_write_permissions("snapshot.yml", text)), 1)
+
+
+class SnapshotTests(unittest.TestCase):
+    def test_both_archives_pinned(self) -> None:
+        self.assertEqual(policy.check_snapshots(lock()), [])
+
+    def test_the_old_single_snapshot_is_a_problem(self) -> None:
+        self.assertEqual(len(policy.check_snapshots({"debian_snapshot": "20261121T203158Z"})), 1)
+
+    def test_a_missing_archive_is_a_problem(self) -> None:
+        problems = policy.check_snapshots({"debian_snapshots": {"debian": "20261121T203158Z"}})
+        self.assertEqual(len(problems), 1)
+        self.assertIn("debian-security", problems[0])
 
 
 class BuilderRefTests(unittest.TestCase):

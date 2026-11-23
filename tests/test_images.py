@@ -24,7 +24,7 @@ kind = "oci"
 """
 
 LOCK: dict[str, object] = {
-    "debian_snapshot": "20261121T203158Z",
+    "debian_snapshots": {"debian": "20261121T203158Z", "debian-security": "20261121T005332Z"},
     "inputs": {
         "node-26": {"version": "26.13.1", "url": "https://example.com/{version}", "sha256": "a" * 64},
         "node-24": {"version": "24.22.3", "url": "https://example.com/{version}", "sha256": "a" * 64},
@@ -60,7 +60,7 @@ class TagTests(unittest.TestCase):
     def test_debian(self) -> None:
         self.assertEqual(
             images.tags_of("debian", LOCK, definition()),
-            ["13", "trixie", "latest", "13-20261121T203158Z"],
+            ["13", "trixie", "latest", "13-20261121T203158Z-20261121T005332Z"],
         )
 
     def test_highest_node_is_lts_and_latest(self) -> None:
@@ -97,9 +97,22 @@ class TagTests(unittest.TestCase):
         with self.assertRaisesRegex(images.ImageError, "unknown image"):
             images.tags_of("python", LOCK, definition())
 
-    def test_missing_snapshot(self) -> None:
-        with self.assertRaisesRegex(images.ImageError, "debian_snapshot"):
+    def test_missing_snapshots(self) -> None:
+        with self.assertRaisesRegex(images.ImageError, "no debian_snapshots"):
             images.tags_of("debian", {}, definition())
+
+    def test_an_old_single_snapshot_is_refused(self) -> None:
+        with self.assertRaisesRegex(images.ImageError, "no debian_snapshots"):
+            images.tags_of("debian", {"debian_snapshot": "20261121T203158Z"}, definition())
+
+    def test_one_archive_missing_or_malformed(self) -> None:
+        for table in (
+            {"debian": "20261121T203158Z"},
+            {"debian": "20261121T203158Z", "debian-security": "latest"},
+            {"debian": "", "debian-security": "20261121T005332Z"},
+        ):
+            with self.subTest(table=table), self.assertRaisesRegex(images.ImageError, "debian_snapshots"):
+                images.tags_of("debian", {"debian_snapshots": table}, definition())
 
 
 class LayoutNameTests(unittest.TestCase):

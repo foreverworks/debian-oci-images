@@ -1,7 +1,9 @@
-# Does the newest Debian snapshot change any published image? If it does, this workflow writes that
-# snapshot to the `snapshot-feed` branch and ticks the Dependency Dashboard's "run again" box, and
-# Renovate (renovate.json, the debian-snapshot datasource) opens a pull request that moves lock.json's
-# debian_snapshot to it. That pull request merges itself once CI passes, and the merge releases
+# Does the newest Debian snapshot change any published image? The two archives, debian and
+# debian-security, are pinned apart, each at its own snapshot. If the newest of both change an image, this
+# workflow writes the two IDs to the `snapshot-feed` branch (debian-snapshot.json and
+# debian-security-snapshot.json) and ticks the Dependency Dashboard's "run again" box, and Renovate
+# (renovate.json, the two snapshot datasources) opens one pull request that moves both of lock.json's
+# debian_snapshots to them. That pull request merges itself once CI passes, and the merge releases
 # (release-next.yml).
 #
 # What starts it:
@@ -9,8 +11,10 @@
 #   - repository_dispatch (type upstream-changed) or workflow_dispatch, how an outside poller starts it
 #     within a minute or two of a change upstream. Both carry the same three optional keys, in
 #     client_payload or in the inputs: `source` (debian, node or manual), `snapshot` (the newest
-#     completed snapshot the caller saw, YYYYMMDDTHHMMSSZ) and `seen_at` (the RFC 3339 time it saw the
-#     change). A key that fails its format is ignored with a warning;
+#     completed snapshot the caller saw, YYYYMMDDTHHMMSSZ), `archive` (debian or debian-security: the
+#     archive that snapshot belongs to, debian-security when it is left out) and `seen_at` (the RFC 3339
+#     time it saw the change). A key that fails its format is ignored with a warning, and a snapshot
+#     whose archive is bad goes with it;
 #   - the end of every release run, because a dispatch that arrives while a release is under way is
 #     skipped (below) and would otherwise wait for the next hour.
 #
@@ -19,9 +23,12 @@
 # A snapshot whose uploads touch no package of these images builds nothing and moves nothing.
 #
 # snapshot.debian.org records the main archive about every six hours and the security archive each time
-# it changes, often several times a day. It caches its listing for up to ten minutes, so when the caller
-# names the snapshot it saw, the plan is repeated (a minute apart, for at most 15 minutes) until it sees that
-# snapshot or a newer one. Planning downloads only the signed indices.
+# it changes, often several times a day. It caches its listing for up to ten minutes, but a snapshot
+# named explicitly is confirmed by a read that bypasses that cache. So when the caller names the
+# snapshot it saw and the listing is behind it, scripts/plan-snapshots plans again at once with the
+# caller's snapshot for its archive and the listing's for the other, and does not wait for the cache.
+# A plan that fails (a mirror that does not serve a listed snapshot's files yet, a rate limit) is tried
+# again, a minute apart, for about ten minutes. Planning downloads only the signed indices.
 #
 # A Node.js release changes no Debian snapshot: for source node the plan and the feed are skipped, and the
 # only job is to tick the dashboard's box, so Renovate's node-version datasource opens that pull request.
@@ -44,6 +51,10 @@ on:
         required: false
       snapshot:
         description: "The newest completed snapshot the caller saw, YYYYMMDDTHHMMSSZ"
+        type: string
+        required: false
+      archive:
+        description: "The archive of that snapshot: debian or debian-security (default debian-security)"
         type: string
         required: false
       seen_at:
@@ -72,6 +83,7 @@ jobs:
     outputs:
       source: ${{ steps.read.outputs.source }}
       asked_snapshot: ${{ steps.read.outputs.asked_snapshot }}
+      asked_archive: ${{ steps.read.outputs.asked_archive }}
     steps:
       # What started this run. The values come from whoever dispatched it, so they pass through env:,
       # are checked against their format, and are never printed back: a bad one is ignored.
@@ -82,6 +94,7 @@ jobs:
           REPO: ${{ github.repository }}
           IN_SOURCE: ${{ github.event.client_payload.source || inputs.source }}
           IN_SNAPSHOT: ${{ github.event.client_payload.snapshot || inputs.snapshot }}
+          IN_ARCHIVE: ${{ github.event.client_payload.archive || inputs.archive }}
           IN_SEEN_AT: ${{ github.event.client_payload.seen_at || inputs.seen_at }}
         run: |
           set -eu
@@ -92,12 +105,25 @@ jobs:
             *) echo "::warning::ignoring the source: it is not debian, node or manual" ;;
           esac
           asked=
+          archive=
           if [ -n "$IN_SNAPSHOT" ]; then
             if [[ $IN_SNAPSHOT =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
               asked=$IN_SNAPSHOT
+              archive=debian-security
             else
               echo "::warning::ignoring the snapshot: it is not YYYYMMDDTHHMMSSZ"
             fi
+            # The archive says which of the two the snapshot belongs to. A bad one takes the snapshot with it:
+            # a snapshot read as the wrong archive's would send the plan to look for what is not there.
+            case "$IN_ARCHIVE" in
+              debian | debian-security) archive=$IN_ARCHIVE ;;
+              "") ;;
+              *)
+                echo "::warning::ignoring the snapshot: its archive is not debian or debian-security"
+                asked=
+                archive=
+                ;;
+            esac
           fi
           seen=
           if [ -n "$IN_SEEN_AT" ]; then
@@ -111,6 +137,7 @@ jobs:
           {
             echo "source=$source"
             echo "asked_snapshot=$asked"
+            echo "asked_archive=$archive"
           } >> "$GITHUB_OUTPUT"
           if [ -n "$seen" ]; then
             # A log line only: an API blip must not stop the plan.
@@ -126,7 +153,7 @@ jobs:
           fi
 
   plan:
-    name: plan the newest snapshot against the last release
+    name: plan the newest snapshots against the last release
     needs: trigger
     # A Node.js release changes no Debian snapshot, so it has nothing to plan (ask-renovate handles it).
     # A release that failed or was cancelled published nothing new, so it starts no plan either.
@@ -134,10 +161,11 @@ jobs:
       needs.trigger.outputs.source != 'node' &&
       (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-26.04
-    timeout-minutes: 30 # the retry loop stops waiting after 15 minutes, then the plan itself
+    timeout-minutes: 25 # a failing plan is retried for 10 minutes, then the last try itself
     outputs:
       changed: ${{ steps.plan.outputs.changed }}
-      snapshot: ${{ steps.plan.outputs.snapshot }}
+      debian: ${{ steps.plan.outputs.debian }}
+      debian_security: ${{ steps.plan.outputs.debian_security }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -187,79 +215,69 @@ jobs:
           FACTORY_BUILDER: skip
         run: scripts/factory install
 
-      - name: Plan at the newest snapshot against what the last release published
+      - name: Plan at the newest snapshots against what the last release published
         id: plan
         if: steps.busy.outputs.pending == 'false' && steps.busy.outputs.running == '0'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           ASKED: ${{ needs.trigger.outputs.asked_snapshot }}
+          ARCHIVE: ${{ needs.trigger.outputs.asked_archive }}
         run: |
           set -eu
-          mkdir -p work
-          tag=$(gh release view --repo "$REPO" --json tagName --jq .tagName)
-          # snapshot.debian.org answers its listing from a cache of up to ten minutes: when the caller saw a
-          # newer snapshot than the plan does, plan again a minute later, for at most 15 minutes.
-          attempt=1
-          SECONDS=0
-          while :; do
-            scripts/factory plan --snapshot latest \
-              --against oci://ghcr.io/foreverworks/debian --against oci://ghcr.io/foreverworks/node \
-              --against "github-release://$REPO@$tag" --out work/plan.json
-            snapshot=$(jq -r .snapshot work/plan.json)
-            echo "$snapshot" | grep -Eq '^[0-9]{8}T[0-9]{6}Z$' || { echo "the plan's snapshot is $snapshot" >&2; exit 1; }
-            [[ -z "$ASKED" || ! "$snapshot" < "$ASKED" || "$SECONDS" -ge 840 ]] && break
-            echo "the plan sees $snapshot, older than the $ASKED the caller saw: attempt $attempt, planning again in 60 s"
-            attempt=$((attempt + 1))
-            sleep 60
-          done
-          python3 scripts/images.py plan work/plan.json > work/states.txt
-          cat work/states.txt
-          grep '^changed=' work/states.txt >> "$GITHUB_OUTPUT"
-          echo "snapshot=$snapshot" >> "$GITHUB_OUTPUT"
-          {
-            echo "Planned at $snapshot against release $tag:"
-            echo '```'
-            cat work/states.txt
-            echo '```'
-            if [[ -n "$ASKED" && "$snapshot" < "$ASKED" ]]; then
-              echo "The listing still showed a snapshot older than the $ASKED the caller saw after $attempt attempts: this plan used what it had."
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          TAG=$(gh release view --repo "$REPO" --json tagName --jq .tagName)
+          export TAG
+          scripts/plan-snapshots work
+          cat work/outputs.txt >> "$GITHUB_OUTPUT"
+          cat work/summary.md >> "$GITHUB_STEP_SUMMARY"
 
   feed:
-    name: write the snapshot for Renovate
+    name: write the snapshots for Renovate
     needs: plan
     if: needs.plan.outputs.changed == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
-      contents: write # the snapshot-feed branch only: one orphan commit holding debian-snapshot.json
+      contents: write # the snapshot-feed branch only: one orphan commit holding the two feed files
     steps:
-      - name: Write debian-snapshot.json to the snapshot-feed branch, unless it already holds this snapshot
+      # One file per archive, both in the one commit, so Renovate sees them move together. The check is
+      # per file: a file that already holds its snapshot needs nothing, and the commit is written when
+      # either differs.
+      - name: Write the feed files to the snapshot-feed branch, unless both already hold their snapshot
         env:
-          SNAPSHOT: ${{ needs.plan.outputs.snapshot }}
+          DEBIAN: ${{ needs.plan.outputs.debian }}
+          SECURITY: ${{ needs.plan.outputs.debian_security }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SERVER: ${{ github.server_url }}
         run: |
           set -eu
-          now=$(gh api "repos/$REPO/contents/debian-snapshot.json?ref=snapshot-feed" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
-          if printf '%s' "$now" | grep -q "\"$SNAPSHOT\""; then
-            echo "the feed already holds $SNAPSHOT"
+          stale=false
+          for pair in "debian-snapshot.json $DEBIAN" "debian-security-snapshot.json $SECURITY"; do
+            file=${pair% *}
+            id=${pair#* }
+            now=$(gh api "repos/$REPO/contents/$file?ref=snapshot-feed" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
+            if printf '%s' "$now" | grep -q "\"$id\""; then
+              echo "$file already holds $id"
+            else
+              stale=true
+            fi
+          done
+          if [ "$stale" = false ]; then
             exit 0
           fi
           mkdir feed
           cd feed
           git init --quiet --initial-branch=snapshot-feed
-          printf '{"releases": [{"version": "%s"}]}\n' "$SNAPSHOT" > debian-snapshot.json
-          git add debian-snapshot.json
+          printf '{"releases": [{"version": "%s"}]}\n' "$DEBIAN" > debian-snapshot.json
+          printf '{"releases": [{"version": "%s"}]}\n' "$SECURITY" > debian-security-snapshot.json
+          git add debian-snapshot.json debian-security-snapshot.json
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-            commit --quiet -m "Debian snapshot $SNAPSHOT"
+            commit --quiet -m "Debian snapshots $DEBIAN and $SECURITY"
           auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
           echo "::add-mask::$auth"
           git -c http.extraheader="AUTHORIZATION: basic $auth" push --quiet --force "$SERVER/$REPO" HEAD:refs/heads/snapshot-feed
-          echo "the feed now holds $SNAPSHOT" >> "$GITHUB_STEP_SUMMARY"
+          echo "the feed now holds debian $DEBIAN and debian-security $SECURITY" >> "$GITHUB_STEP_SUMMARY"
 
   # Renovate runs on its own schedule. Its Dependency Dashboard has a box that asks for a run now;
   # ticking it is Renovate's own way to be called (docs.renovatebot.com, key concepts: dashboard).
