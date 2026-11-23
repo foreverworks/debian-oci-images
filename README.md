@@ -30,8 +30,10 @@ Use Docker Hub's official [`debian`](https://hub.docker.com/_/debian) or
 ## What you need
 
 - Docker, or another OCI runtime, on `linux/amd64`. The images are public: no login, no cost.
-- To verify them, [`cosign`](https://github.com/sigstore/cosign) 3.x, Python 3.13 or newer, `git`,
-  and optionally [`oras`](https://oras.land).
+- To verify them: `git`, `curl`, `sha256sum` and Python 3.13 or newer for the records (step 2 below),
+  and [`cosign`](https://github.com/sigstore/cosign) 3.x for the signatures (step 1 and the factory
+  check in step 2). [`oras`](https://oras.land) is optional: it only lists the records (step 3) and
+  resolves a digest, which `docker` can do too.
 
 ## Quick start
 
@@ -130,7 +132,8 @@ packages in one layer of about 114 MB. It includes `bash`, `apt`, `perl`, `tar` 
 `trixie-security`, with the package lists left out, so run `apt-get update` first.
 
 **`node`** is that image plus the Node.js release from nodejs.org, unpacked in `/usr/local`, with the
-`npm` and `npx` that come with it. It starts `node`. The Node.js tarball is checked at build time
+`npm` and `npx` that come with it, and one more Debian package, `libatomic1`, which the `node` binary
+links against: 73 Debian packages in all. It starts `node`. The Node.js tarball is checked at build time
 against the signature Node.js publishes for it.
 
 Not in either image:
@@ -181,7 +184,8 @@ python3 debian-image-factory-0.6.3.pyz verify \
   --pull --require-checks --lock lock.json --definition factory.toml
 ```
 
-`--pull` downloads the whole image and checks every layer against its digest. The command then checks
+`--pull` downloads the whole image and checks every layer against its digest. It needs only Python and
+the network: no `cosign`, no `oras`. The command then checks
 that the records are about exactly these bits, that there is exactly one provenance and it names this
 repository's `lock.json` by sha256, that there is exactly one SBOM, and that every check the
 definition requires has a passing result. It names every problem it finds and exits 1, or prints a
@@ -189,7 +193,7 @@ short summary and exits 0. For `node:26` it printed:
 
 ```
 oci://ghcr.io/foreverworks/node@sha256:dc55...fd0: verified
-  node-26 identity bf7e097f...a381: 10 records (1 provenance, 1 SBOM, 8 test results)
+  node-26 identity bf7e097f...b798: 10 records (1 provenance, 1 SBOM, 8 test results)
   lock.json sha256:4e8d1abae496ea4389e6e9bf2876cd01fd9d12bb5ff493df8639012fd5bd14e0
   required checks all passing: ancestry, locked-inputs, no-build-snapshot, no-machine-identity, oci-run, package-set, sbom-complete, two-clones
 ```
@@ -288,7 +292,7 @@ with no network, using Debian's own tools from a pinned snapshot.
 git clone https://github.com/foreverworks/debian-oci-images
 cd debian-oci-images
 scripts/factory install                 # downloads the pinned factory and checks its sha256
-scripts/factory plan --out plan.json    # which images need building, at the lock's snapshot
+scripts/factory plan --out plan.json    # which images need building: on a first run, all five (core, debian, node-22, -24, -26)
 scripts/factory fetch plan.json         # downloads and verifies every input
 scripts/factory build plan.json --out out/   # in the builder that builder.ref pins by digest
 scripts/factory test out/               # runs the built-in checks on every image
