@@ -99,11 +99,16 @@ Adding and removing a line is a manual, reviewed change: a block in `factory.tom
 commitment, and because the end of life of a line is a date a person should notice and not a version
 string a bot can compare. The highest line is the one tagged `lts` and `latest`.
 
-**Debian snapshot.** `debian_snapshot` in the lock (today `20261121T203158Z`) is the one build snapshot
-all packages are resolved at. It moves by `lock snapshot --latest`, and a snapshot move changes the
-identity of every image whose package set changed, so only those rebuild (factory DESIGN 7). Debian
-security updates reach the images this way: the hourly snapshot check (section 6) looks at the newest
-snapshot, and a pull request moves the lock to it.
+**Debian snapshots.** `debian_snapshots` in the lock pins the two archives apart: `debian` (today
+`20261121T203158Z`) and `debian-security` (`20261121T005332Z`). Packages are resolved at the pair. The two
+are separate because snapshot.debian.org records the main archive about every six hours and the security
+archive each time it changes, often several times a day: one shared ID would make a security fix wait for
+the slower archive's next snapshot, or hold the main archive at a time it never had. Each ID is usable as
+soon as its own archive lists it. The pair moves by `lock snapshot --latest`, or one archive at a time by
+`lock snapshot --id debian-security=ID`, and a move changes the identity of every image whose package set
+changed, so only those rebuild (factory DESIGN 7). Debian security updates reach the images this way: the
+snapshot check (section 6) looks at the newest snapshot of each archive, and one pull request moves the
+lock to both.
 
 **Renovate rules:**
 
@@ -159,7 +164,8 @@ its builder (section 8, gap 2), the Action can be used, and `builder.ref` and `s
 
 - every image: `identity-<64 hex>`, the factory's own tag, derived from every input of the build.
   It is how the plan asks a registry "is this already built?" (factory DESIGN 7.4);
-- `debian`: `13`, `trixie`, `latest`, and `13-<debian_snapshot>`, for example `13-20261121T203158Z`;
+- `debian`: `13`, `trixie`, `latest`, and `13-<debian>-<security>`, the two snapshot IDs the image was
+  built at, for example `13-20261121T203158Z-20261121T005332Z`;
 - `node`, for each line N: `N`, `<version>`, `N-trixie` and `<version>-trixie`; the highest N also gets
   `lts` and `latest`.
 
@@ -195,7 +201,7 @@ Four other jobs may write, each only the scopes `scripts/policy.py` allows it, a
 - `tag` in `release-next.yml` (`contents`, `actions`), on `main` only. It runs `git` and
   `scripts/release_next.py`, creates one version tag and dispatches `release.yml` on it.
 - `feed` in `snapshot.yml` (`contents`). It checks nothing out; it force-pushes one orphan
-  commit holding `debian-snapshot.json` to the branch `snapshot-feed`.
+  commit holding `debian-snapshot.json` and `debian-security-snapshot.json` to the branch `snapshot-feed`.
 - `ask-renovate` in `snapshot.yml` (`issues`). It checks nothing out; it ticks the "run again" box of
   Renovate's Dependency Dashboard issue.
 
@@ -203,7 +209,7 @@ Four other jobs may write, each only the scopes `scripts/policy.py` allows it, a
 and every merge that changes an input (`lock.json`, `factory.toml`, `builder.ref`) is released:
 
 1. Renovate opens the pull request: a Node.js version, a factory release (its `.pyz` in the lock and
-   its builder in `builder.ref`, together), a pinned Action, or the Debian snapshot (`snapshot.yml`
+   its builder in `builder.ref`, together), a pinned Action, or the Debian snapshots (`snapshot.yml`
    below). `renovate-checksums.yml` commits new checksums to the branch and dispatches CI on it.
 2. Renovate enables GitHub's auto-merge (`platformAutomerge`). The ruleset `protect main` requires both
    CI jobs, so the pull request merges only when the static checks and the build and test of every
@@ -229,7 +235,7 @@ When something stops halfway:
 On every push to `main` and every pull request:
 
 1. static checks: `scripts/check` (section 10);
-2. build and test every image from the lock's snapshot, with nothing published: `plan` with no
+2. build and test every image from the lock's snapshots, with nothing published: `plan` with no
    `--against`, `fetch`, `build`, `test`, then `verify --require-checks` on every layout, one `verify`
    per image, side by side.
 
@@ -240,7 +246,7 @@ holds a read-only token.
 
 ### nightly.yml
 
-On a schedule and on demand. It plans at the **newest** snapshot against a target that persists in the
+On a schedule and on demand. It plans at the **newest** snapshot of each archive against a target that persists in the
 Actions cache: a local zot registry on `127.0.0.1` for the OCI images and a `dir://` directory for
 `core`. It builds and tests what changed, "publishes" only that into the cache, and prunes the cache. A child
 that builds alone (a Node.js bump, with `debian` reused) reads its parent from the cache for both `build`
@@ -255,25 +261,51 @@ and `test`, so its `ancestry` check runs and the child passes and is kept as goo
 ### snapshot.yml
 
 Every hour, on demand, and when told that something changed. One read-only job plans at the **newest**
-snapshot against what the last release published: `oci://ghcr.io/foreverworks/debian`,
-`oci://ghcr.io/foreverworks/node` and the core tarball on the newest GitHub release. `changed=true`
-means a release now would build something new: a Debian upload touched a package of an image. A second
-job then writes that snapshot ID to `debian-snapshot.json` on the branch `snapshot-feed`, which Renovate
-reads as the custom datasource `debian-snapshot` and turns into a pull request moving `debian_snapshot`
-in the lock. A third job ticks the Dependency Dashboard's "run again" box, so Renovate reads the feed at
-once instead of on its own schedule. The branch must always exist (seeded with the lock's snapshot):
-without it Renovate reports `no-result` for `debian-snapshot` on the dashboard.
+snapshot of each archive against what the last release published: `oci://ghcr.io/foreverworks/debian`,
+`oci://ghcr.io/foreverworks/node` and the core tarball on the newest GitHub release. The plan is
+`scripts/plan-snapshots`, which runs the factory's `plan --snapshot latest` and reads the two IDs it used
+from `plan.json` (`snapshots`). `changed=true` means a release now would build something new: a Debian
+upload touched a package of an image. A second job then writes the two IDs to `debian-snapshot.json` and
+`debian-security-snapshot.json` on the branch `snapshot-feed`, in one orphan commit and only when either
+file does not already hold its ID. Renovate reads each file as its own custom datasource
+(`debian-snapshot`, `debian-security-snapshot`) and turns them into one pull request, because one
+package rule groups them, that moves both lines of `debian_snapshots` in the lock. A third job ticks the
+Dependency Dashboard's "run again" box, so Renovate reads the feed at once instead of on its own schedule.
+
+The branch must exist before the first run, holding both files with the lock's two IDs: without the
+files Renovate reports `no-result` for the datasource on the dashboard, and a pull request could move one
+archive alone. Seed it with one orphan commit right after the change that introduces
+`debian-security-snapshot.json` lands on `main` (an earlier run of the old workflow would otherwise write
+a branch with the main archive's file only):
+
+```sh
+git init --initial-branch=snapshot-feed seed && cd seed
+printf '{"releases": [{"version": "%s"}]}\n' "$DEBIAN_ID" > debian-snapshot.json
+printf '{"releases": [{"version": "%s"}]}\n' "$SECURITY_ID" > debian-security-snapshot.json
+git add . && git commit -m "Debian snapshots $DEBIAN_ID and $SECURITY_ID"
+git push --force https://github.com/foreverworks/debian-oci-images snapshot-feed
+```
+
+`DEBIAN_ID` and `SECURITY_ID` are the two values of `debian_snapshots` in the lock at that moment.
 
 What starts it. The hourly schedule is the fallback and needs nobody to call it. An outside poller that
 watches upstream starts it within a minute or two of a change, with a `repository_dispatch` event of type
-`upstream-changed` or a `workflow_dispatch`. Both carry three optional keys (`client_payload` or the
+`upstream-changed` or a `workflow_dispatch`. Both carry four optional keys (`client_payload` or the
 inputs): `source` (`debian`, `node` or `manual`), `snapshot` (the newest completed snapshot the caller
-saw, `YYYYMMDDTHHMMSSZ`) and `seen_at` (the RFC 3339 time it saw the change). A key with a bad format is
-ignored with a warning. With `seen_at` the run's summary records the dispatch latency. With `snapshot`,
-the plan is repeated, a minute apart and for at most 15 minutes, while the listing it sees is older than that
-snapshot (snapshot.debian.org caches its listing for up to ten minutes), and then uses what it has. The
-end of every `release.yml` run also starts it, because a dispatch that arrives during a release is
-skipped (below) and would otherwise wait for the next hour.
+saw, `YYYYMMDDTHHMMSSZ`), `archive` (`debian` or `debian-security`: the archive that snapshot belongs to,
+`debian-security` when it is left out) and `seen_at` (the RFC 3339 time it saw the change). A key with a bad
+format is ignored with a warning, and a snapshot whose archive is bad goes with it, since it would be read
+as the wrong archive's. With `seen_at` the run's summary records the dispatch latency.
+
+With `snapshot`, the plan does not wait for snapshot.debian.org's listing cache (ten minutes). When the
+snapshot of the caller's archive in the listing is older than the caller's, `plan-snapshots` plans again at
+once with `--snapshot debian=ID,debian-security=ID`, naming the caller's ID for its archive and the
+listing's ID for the other. A snapshot named explicitly is confirmed by a read that bypasses the cache, so
+it is usable as soon as its own archive lists it. A plan that fails is tried again, a minute apart, for
+about ten minutes: a snapshot that is listed but whose files a mirror does not serve yet is a 404, and a
+rate limit looks the same. After that the run fails with the last error. The end of every `release.yml`
+run also starts the workflow, because a dispatch that arrives during a release is skipped (below) and
+would otherwise wait for the next hour.
 
 A Node.js release changes no Debian snapshot: for `source` `node` the plan and the feed are skipped and
 the third job ticks the box at once, so Renovate's `node-version` datasource opens that pull request. A
@@ -281,9 +313,13 @@ plan that was skipped or found nothing ticks nothing.
 
 The plan is skipped while a release is due or under way (`scripts/release_next.py pending`, or a
 `release-next.yml` or `release.yml` run not yet finished): until it finishes the registry holds the old
-images, and the plan would propose a snapshot for changes already on their way. snapshot.debian.org
+images, and the plan would propose snapshots for changes already on their way. snapshot.debian.org
 records the main archive about every six hours and the security archive each time it changes, often
-several times a day, so a security fix reaches a pull request within about an hour of its snapshot.
+several times a day, so a security fix reaches a pull request within minutes of its snapshot when the
+poller reports it, and within the hour otherwise.
+
+Renovate is set to open a snapshot pull request whatever it opened in the last hour (`prHourlyLimit` is
+0), because a pull request held back by that limit would delay a security fix by up to an hour.
 
 The nightly keeps its own target in a cache and does not plan against the registry (section 9).
 
@@ -306,8 +342,8 @@ On a push of a tag `v*` by a maintainer, or dispatched on a tag by `release-next
 
 **Why the release builds the whole chain.** The factory can reuse an image from a registry and check
 its child against it (`plan --against`, `test --parents`), as the nightly does. The release does not:
-it is one set of images at one snapshot, and an image reused from an earlier release would be tagged
-`13-<snapshot>` for a snapshot it was not built at. Reusing images in a release is a decision for the maintainers
+it is one set of images at one pair of snapshots, and an image reused from an earlier release would be tagged
+`13-<debian>-<security>` for snapshots it was not built at. Reusing images in a release is a decision for the maintainers
 (section 9).
 
 **Why two jobs.** The build runs package scripts as root in a privileged container. A job that does so

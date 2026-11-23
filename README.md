@@ -95,7 +95,7 @@ request when a new release moves the tag to another digest.
 
 | Image | Tags |
 |---|---|
-| `debian` | `13`, `trixie`, `latest`, and `13-<snapshot>` for the Debian snapshot it was built at (`13-20261121T203158Z`) |
+| `debian` | `13`, `trixie`, `latest`, and `13-<debian>-<security>` for the two Debian snapshots it was built at: the main archive's first, then the security archive's (`13-20261121T203158Z-20261121T005332Z`) |
 | `node` | `<major>` (`26`), `<version>` (`26.13.1`), `<major>-trixie`, `<version>-trixie`. The newest LTS line also has `lts` and `latest` |
 | every image | `identity-<64 hex>`: the factory's own tag, derived from every input of the build |
 
@@ -239,9 +239,10 @@ factory's own wording is in its
 
 - **Which packages?** Every installed package and every other input is listed in an SPDX 2.3 software
   bill of materials attached to the image.
-- **From where?** Debian packages come from one dated snapshot of snapshot.debian.org. Every input,
+- **From where?** Debian packages come from dated snapshots of snapshot.debian.org, one for the main
+  archive and one for the security archive, each pinned in its own right. Every input,
   down to the Node.js tarball, is named with its checksum in [`lock.json`](lock.json).
-- **Built how?** A SLSA provenance record names the lock by its sha256, the snapshot, the recipe, the
+- **Built how?** A SLSA provenance record names the lock by its sha256, the two snapshots, the recipe, the
   parent image and the builder.
 - **Tested how?** One test result per check is attached. The checks run on the built image, and the
   Node.js one compares the version with the lock.
@@ -253,12 +254,15 @@ factory's own wording is in its
 A new image reaches you in three steps: an input changes, a release is built and published, and you move
 your pin.
 
-- **Debian updates.** A workflow plans the newest Debian snapshot against what the last release
+- **Debian updates.** The main archive and the security archive are pinned apart, each at its own
+  snapshot, because the security archive changes several times a day and the main one about every six
+  hours. A workflow plans the newest snapshot of each against what the last release
   published. It is scheduled every hour and also runs within a minute or two when an outside poller
-  reports a change. GitHub starts scheduled runs when it can, and in a quiet repository it starts them
+  reports a change, naming the snapshot it saw so that the plan does not wait for snapshot.debian.org's
+  listing cache. GitHub starts scheduled runs when it can, and in a quiet repository it starts them
   less often than asked, so the poller is the dependable path. When a Debian upload (often a security
-  fix) changes one of the images, Renovate opens a pull request that moves the lock to that snapshot.
-  A snapshot that touches none of their packages changes nothing.
+  fix) changes one of the images, Renovate opens one pull request that moves the lock to both snapshots.
+  Snapshots that touch none of their packages change nothing.
 - **Node.js and the rest.** Renovate also opens a pull request for each new Node.js patch or minor
   version inside a supported line, for a new factory release and for the pinned GitHub Actions. A
   workflow then commits the new checksums to Renovate's branch. Renovate never moves a line to the
@@ -269,7 +273,7 @@ your pin.
   version, and the release workflow builds and tests everything, publishes, verifies what it pushed,
   signs it, and only then moves the tags. A maintainer can still tag a release by hand.
 - **Tags move only to builds that passed.** If a check fails, the old tag stays where it is.
-- **A nightly build** plans at the newest snapshot, builds only the images whose inputs changed, and
+- **A nightly build** plans at the newest snapshots, builds only the images whose inputs changed, and
   keeps the result in a cache. It never publishes: it shows that the next release would build and pass
   its checks.
 
@@ -316,7 +320,7 @@ actionlint if installed, and a lock check). It needs `shellcheck` and `mypy`, wh
 | File | Role |
 |---|---|
 | `factory.toml` | The images: kinds, parents, start command, labels. No versions. |
-| `lock.json` | Every version and checksum: the Debian snapshot, the factory, each Node.js tarball, the release keyring. |
+| `lock.json` | Every version and checksum: the two Debian snapshots, the factory, each Node.js tarball, the release keyring. |
 | `builder.ref` | The builder image, by digest. |
 | `scripts/` | Small glue around the factory, and the checks that keep this repository honest. |
 | `.github/workflows/` | CI, the nightly plan, the snapshot check, the automatic release and the release itself. |

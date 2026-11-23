@@ -34,12 +34,14 @@ once images carrying the fix are available.
 ## How fixes reach the images
 
 Fixed Debian security updates reach the images on their own. Every hour a workflow plans the
-newest Debian snapshot against the published images; when an upload changes one of them, Renovate opens
-a pull request that moves the lock to that snapshot. It merges itself once CI has built and tested every
-image, and the merge is released at once: published, verified, signed, then tagged. A new Node.js patch
-release takes the same path through its own Renovate pull request. snapshot.debian.org records the
-security archive each time it changes, so the design puts a fix in a release a few hours after its upload.
-Release v0.1.0 was tagged by hand and no update has gone through this path yet, so that time is not
+newest snapshot of the Debian main archive and of the Debian security archive against the published
+images; when an upload changes one of them, Renovate opens a pull request that moves the lock to both
+snapshots. The security archive is pinned on its own, and snapshot.debian.org records it each time it
+changes, so a security fix reaches a pull request within minutes of its snapshot when an outside poller
+reports it, and within the hour otherwise. The pull request merges itself once CI has built and tested
+every image, and the merge is released at once: published, verified, signed, then tagged. A new Node.js
+patch release takes the same path through its own Renovate pull request. Release v0.1.0 was tagged by
+hand and no update has gone through this path yet, so the time from a snapshot to a release is not
 measured. GitHub may start a scheduled run later than asked; an outside poller also starts the check
 when upstream changes. Nothing merges on a red check.
 
