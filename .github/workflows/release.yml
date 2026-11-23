@@ -9,13 +9,14 @@
 #            with a read-only token, and hands the output on as a workflow artifact;
 #   publish  pushes debian to ghcr.io/foreverworks/debian and node-* to ghcr.io/foreverworks/node with
 #            their records (one publish --image per repository), verifies every pushed image with all
-#            of its required checks, then puts the core tarball on this tag's GitHub release and verifies it there, signs each image digest
-#            keyless with Sigstore and only then moves the tags (scripts/release).
+#            of its required checks, puts the core tarball on this tag's GitHub release and verifies
+#            it there, signs each image digest keyless with Sigstore, and only then moves the tags
+#            (scripts/release).
 #
 # The build is the whole chain on purpose, whatever the registry holds: a release is one set of images
 # at one snapshot, and an image reused from an earlier release would carry a tag that names a snapshot
-# it was not built at. The factory could now reuse one (`test --parents` reads a parent from a
-# registry); this repository chooses not to (DESIGN.md, section 8).
+# it was not built at. The factory can reuse one (`test --parents` reads a parent from a
+# registry); this repository chooses not to (DESIGN.md, section 6).
 name: release
 
 on:

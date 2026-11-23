@@ -6,6 +6,12 @@ see the [README](README.md). The factory that does the building is
 [debian-image-factory](https://github.com/foreverworks/debian-image-factory), pinned here at v0.6.3; its
 sections are cited as "factory DESIGN n".
 
+**Status.** Built and live: the four images (`debian`, `node` 22, 24 and 26) published by release v0.1.0
+with their SBOM, provenance and test records and a signature on every image digest; the hourly Debian
+snapshot check, the Renovate pull requests that merge themselves, and the release that follows a merge
+(section 6). Not built: arm64 images, signed records and releases that reuse images (sections 8 and 9).
+Release v0.1.0 was tagged by hand and no update has been released automatically yet.
+
 ## 1. Purpose and non-goals
 
 The purpose is to publish a small set of Debian 13 (trixie) and Node.js images that a stranger can
@@ -69,8 +75,8 @@ check name both.
 **Root, and `node` as the command.** The default user is root, as in the official Debian image. A
 non-root default would be a promise about every downstream use that a base image cannot keep: file
 ownership in bind mounts, binding low ports, installing packages. A user who wants non-root says so in
-the next Dockerfile. The Node.js images start `node`, so `docker run image script.js` and
-`docker run image --version` do what people expect.
+the next Dockerfile. The Node.js images set `node` as the default command, with no entrypoint:
+`docker run -it image` opens the REPL, and a script runs as `docker run image node script.js`.
 
 ## 3. Versions
 
@@ -84,7 +90,7 @@ State at 2026-11-22:
 
 | Line | Codename | Status | Version in the lock | End of life |
 |---|---|---|---|---|
-| 26 | Lithium | active LTS (the first `lts` entry of `https://nodejs.org/dist/index.json`, read 2026-11-22) | 26.13.1 | see the schedule |
+| 26 | Lithium | active LTS (the first `lts` entry of `https://nodejs.org/dist/index.json`, read 2026-11-22) | 26.13.1 | 2029-04-30 |
 | 24 | Krypton | maintenance LTS | 24.22.3 | 2028-04-30 |
 | 22 | Jod | maintenance LTS | 22.23.5 | 2027-04-30 |
 
@@ -96,8 +102,8 @@ string a bot can compare. The highest line is the one tagged `lts` and `latest`.
 **Debian snapshot.** `debian_snapshot` in the lock (today `20261121T203158Z`) is the one build snapshot
 all packages are resolved at. It moves by `lock snapshot --latest`, and a snapshot move changes the
 identity of every image whose package set changed, so only those rebuild (factory DESIGN 7). Debian
-security updates reach the images this way: the nightly plan looks at the newest snapshot, and a release
-that follows moves the lock to it.
+security updates reach the images this way: the hourly snapshot check (section 6) looks at the newest
+snapshot, and a pull request moves the lock to it.
 
 **Renovate rules:**
 
@@ -108,7 +114,7 @@ that follows moves the lock to it.
 - GitHub Actions are pinned by commit, with the version as a comment, and Renovate bumps both;
 - `node-release-keys` has no datasource. It is a trust root and moves by hand, as a reviewed diff.
 
-A Renovate change is not a release. It builds and tests in CI and waits for a person to tag.
+A Renovate change merges itself once CI passes, and the release that follows is described in section 6.
 
 ## 4. The lock and how the factory is pinned
 
@@ -279,8 +285,7 @@ images, and the plan would propose a snapshot for changes already on their way. 
 records the main archive about every six hours and the security archive each time it changes, often
 several times a day, so a security fix reaches a pull request within about an hour of its snapshot.
 
-The cache stands in for the registry because the real target does not exist before the first release
-(section 9).
+The nightly keeps its own target in a cache and does not plan against the registry (section 9).
 
 ### release.yml
 
@@ -302,8 +307,8 @@ On a push of a tag `v*` by a maintainer, or dispatched on a tag by `release-next
 **Why the release builds the whole chain.** The factory can reuse an image from a registry and check
 its child against it (`plan --against`, `test --parents`), as the nightly does. The release does not:
 it is one set of images at one snapshot, and an image reused from an earlier release would be tagged
-`13-<snapshot>` for a snapshot it was not built at. The first release also has nothing to reuse.
-Reusing images in a release is a decision for the maintainers (section 9).
+`13-<snapshot>` for a snapshot it was not built at. Reusing images in a release is a decision for the maintainers
+(section 9).
 
 **Why two jobs.** The build runs package scripts as root in a privileged container. A job that does so
 must never hold a token that can write packages or releases, or sign as this repository: a hostile
@@ -336,9 +341,9 @@ The first release, v0.1.0, was tagged by hand; every later one follows a merge (
 - Pull requests: auto-merge allowed, branches deleted after merge.
 - Renovate: the Renovate App has access to this repository.
 - Environment `release`: deployments only from tags matching `v*`.
-- Packages: after the first release, `ghcr.io/foreverworks/debian` and `ghcr.io/foreverworks/node` are
-  set to public by an administrator (a package GitHub creates from a workflow starts private), and an
-  anonymous `docker pull` is checked before the release is announced. The images carry
+- Packages: `ghcr.io/foreverworks/debian` and `ghcr.io/foreverworks/node` are public. A package GitHub
+  creates from a workflow starts private, so an administrator set them after the first release and
+  checked an anonymous `docker pull`. The images carry
   `org.opencontainers.image.source`, so GitHub links each package to this repository.
 - GitHub disables a scheduled workflow after 60 days without activity in the repository, and evicts a
   cache entry unused for 7 days. The first costs nightly runs until someone re-enables it; the second only
@@ -398,9 +403,9 @@ and deleting the interim code in the same pull request, never by leaving both.
 - **arm64.** The factory v0.6.3 supports amd64 only, and architecture is part of every identity, so other
   architectures can follow. This needs the factory first; then `architectures` in `factory.toml` grows by
   one and the nightly and the release build two sets.
-- **Nightly planning against `ghcr.io`.** Today the nightly plans against a cache, because nothing exists
-  on the registry. Once the first release exists, the nightly can ask `ghcr.io` which identities are
-  already published and build only what a release would add, as the factory's design intends. The
+- **Nightly planning against `ghcr.io`.** The nightly plans against a cache. Now that releases exist, it
+  could ask `ghcr.io` which identities are already published and build only what a release would add, as
+  the factory's design intends. The
   `{image}` template does not name the shared `node` repository, so that is one `--against` per
   repository.
 - **Releases that reuse images.** A release could plan against `ghcr.io` and build only what changed

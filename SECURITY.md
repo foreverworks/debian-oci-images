@@ -38,8 +38,10 @@ newest Debian snapshot against the published images; when an upload changes one 
 a pull request that moves the lock to that snapshot. It merges itself once CI has built and tested every
 image, and the merge is released at once: published, verified, signed, then tagged. A new Node.js patch
 release takes the same path through its own Renovate pull request. snapshot.debian.org records the
-security archive each time it changes, so a fix usually reaches a release a few hours after its upload,
-and nothing merges on a red check.
+security archive each time it changes, so the design puts a fix in a release a few hours after its upload.
+Release v0.1.0 was tagged by hand and no update has gone through this path yet, so that time is not
+measured. GitHub may start a scheduled run later than asked; an outside poller also starts the check
+when upstream changes. Nothing merges on a red check.
 
 Between a fix and a release, the images you already pulled are unchanged. Pin by digest, and update your
 pin when a release is published.
@@ -51,5 +53,6 @@ The [README](README.md#verify) shows how to check all of them.
 
 ## Supported versions
 
-The latest release of each image line described in the README. Node.js lines that have reached their
-upstream end-of-life date are removed.
+The latest release of each image line described in the [README](README.md#how-long-a-line-is-supported):
+`debian` (Debian 13) and `node` 22, 24 and 26. A Node.js line is removed on its upstream end-of-life
+date, and older releases get no fixes.
