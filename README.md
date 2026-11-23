@@ -221,9 +221,9 @@ records are DSSE envelopes of in-toto Statements; `oras pull` fetches them if yo
 
 Two limits are worth knowing:
 
-- **The records are unsigned for now.** The factory release these images use (v0.6.3) writes records
+- **The records are unsigned for now.** The release publishes them
   without a signature, and the registry's authentication is what protects them. What is signed today is
-  the image manifest digest. Signed records need a later factory release
+  the image manifest digest. Signing the records too is not switched on yet
   ([DESIGN.md, section 7](DESIGN.md#7-signing-and-records)).
 - **The images are not promised to be byte-for-byte reproducible.** The build is deterministic in its
   inputs: the same lock gives the same package set, and a test checks it. A second build is not
@@ -233,7 +233,7 @@ Two limits are worth knowing:
 SLSA Build L1 means the provenance exists and says what the build used. Build L2 needs a build platform
 that generates and signs the provenance on its own, and L3 needs a hardened, isolated platform. The
 factory's own wording is in its
-[DESIGN, section 8.3](https://github.com/foreverworks/debian-image-factory/blob/v0.6.3/DESIGN.md).
+[DESIGN, section 8.3](https://github.com/foreverworks/debian-image-factory/blob/v0.8.0/DESIGN.md).
 
 ## What you can check, and where it comes from
 
@@ -304,7 +304,7 @@ scripts/factory verify out/node-26-trixie-amd64-*.oci --require-checks --lock lo
 ```
 
 `scripts/factory` refuses any factory bytes other than the ones in `lock.json`, and passes everything
-else to it. The factory's [command line reference](https://github.com/foreverworks/debian-image-factory/blob/v0.6.3/DESIGN.md)
+else to it. The factory's [command line reference](https://github.com/foreverworks/debian-image-factory/blob/v0.8.0/DESIGN.md)
 (section 9.1) lists every option. The factory builds everything from this repository's definition, and
 nothing here runs a package script on your machine outside the builder container.
 

@@ -3,7 +3,7 @@
 This document is for maintainers and reviewers. It says what the repository holds, why the images are
 what they are, and what is deliberately temporary. For what the images give you and how to check them,
 see the [README](README.md). The factory that does the building is
-[debian-image-factory](https://github.com/foreverworks/debian-image-factory), pinned here at v0.6.3; its
+[debian-image-factory](https://github.com/foreverworks/debian-image-factory), pinned here at v0.8.0; its
 sections are cited as "factory DESIGN n".
 
 **Status.** Built and live: the four images (`debian`, `node` 22, 24 and 26) published by release v0.1.0
@@ -126,15 +126,15 @@ A Renovate change merges itself once CI passes, and the release that follows is 
 `lock.json` is the single source of every version and checksum (factory DESIGN 6.1). `factory.toml`
 holds no versions, so a version has one home.
 
-**The factory itself.** The `debian-image-factory` entry names the release (0.6.3), the URL of its `.pyz`
-and its sha256 `a2dab616...5c62`. `scripts/factory install` downloads that file and refuses any other
+**The factory itself.** The `debian-image-factory` entry names the release (0.8.0), the URL of its `.pyz`
+and its sha256 `dc742777...82a3`. `scripts/factory install` downloads that file and refuses any other
 bytes. The `.pyz` is the only code that runs the build, so its checksum is the root of the chain.
 
 **The builder.** The factory builds in a container image. `builder.ref` is one line, a reference with the
 tag for readers and the digest for the machine:
 
 ```
-ghcr.io/foreverworks/debian-image-factory-builder:v0.6.3@sha256:c9734c73...41b3
+ghcr.io/foreverworks/debian-image-factory-builder:v0.8.0@sha256:e8afb458...6b9f
 ```
 
 `scripts/policy.py` checks that its tag equals the factory version in the lock, so one pull request moves
@@ -147,7 +147,7 @@ workflow. Anyone can check them with the identity
 and the issuer `https://token.actions.githubusercontent.com`. The builder reference was verified this way
 with cosign 3.1.4 when it was pinned.
 
-**Why the factory's GitHub Action is not used.** In v0.6.3 the Action builds its builder from the
+**Why the factory's GitHub Action is not used.** In v0.8.0 the Action builds its builder from the
 factory's own checkout and has no input to name another one. This repository wants the published builder,
 by digest, so it cannot use the Action: `scripts/factory` calls the `.pyz` directly. When the `.pyz` pins
 its builder (section 8, gap 2), the Action can be used, and `builder.ref` and `scripts/factory` go away.
@@ -391,27 +391,28 @@ The first release, v0.1.0, was tagged by hand; every later one follows a merge (
 GitHub OIDC identity, `cosign sign`. That is how the factory signs its own builder image.
 The verification command, with the exact identity regular expression, is in the README.
 
-**Not signed today:** the records (provenance, SBOM, test results). Factory v0.6.3 accepts only
-`publish --sign none`, so they are DSSE envelopes with an empty signature list, attached to the image
+**Not signed today:** the records (provenance, SBOM, test results). The release publishes with
+`--sign none`, so they are DSSE envelopes with an empty signature list, attached to the image
 as OCI referrers and, for `core`, in `<sha256>.intoto.jsonl` beside the asset. Their protection is the
 registry's authentication and, by digest, the fact that the signed image names the same bits the records
 describe.
 
-**What waits on the factory:** `publish --sign keyless` (factory DESIGN 8.3). When it exists, this
-repository adds the flag, and the README says that records are signed. Nothing in a record changes shape
+**What waits here:** the factory has `publish --sign keyless` since 0.7.0 (factory DESIGN 8.3). When this
+repository switches it on, the README says that records are signed. Nothing in a record changes shape
 when signing is switched on.
 
 **The claim.** The provenance is SLSA Build L1, written by the build and not by the platform
 (factory DESIGN 8.3). This repository does not claim more, and does not add GitHub's own attestation
 beside it. It could, and that statement would carry whatever level GitHub claims.
 
-## 8. Waiting on the factory
+## 8. Open gaps
 
-Two gaps remain, each with its effect here, the interim, and the factory change that removes it.
+Two gaps remain, each with its effect here, the interim, and the change that removes it.
 
 **1. Records are unsigned.**
 - *Interim:* the image digest is signed (section 7).
-- *Removal:* `publish --sign keyless`, planned in factory DESIGN 8.3. Later factory work.
+- *Removal:* `publish --sign keyless`, in the factory since 0.7.0 (its DESIGN 8.3); this repository's
+  publish jobs still have to switch it on.
 
 **2. The `.pyz` does not pin its builder, and the Action has no builder input** (factory DESIGN 5.4).
 - *Interim:* `builder.ref` and `scripts/factory`, with the policy check that keeps the tag equal to the
@@ -436,7 +437,7 @@ and deleting the interim code in the same pull request, never by leaving both.
 
 ## 9. Later work
 
-- **arm64.** The factory v0.6.3 supports amd64 only, and architecture is part of every identity, so other
+- **arm64.** The factory v0.8.0 supports amd64 only, and architecture is part of every identity, so other
   architectures can follow. This needs the factory first; then `architectures` in `factory.toml` grows by
   one and the nightly and the release build two sets.
 - **Nightly planning against `ghcr.io`.** The nightly plans against a cache. Now that releases exist, it
