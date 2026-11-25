@@ -11,7 +11,7 @@
       "extractVersion": "^v(?<version>.+)$",
       "sha256": "dc742777bc3a774a02afcba45bc9695ea28908146139fcf451ee18e5b78a82a3",
       "url": "https://github.com/foreverworks/debian-image-factory/releases/download/v{version}/debian-image-factory-{version}.pyz",
-      "version": "0.8.0"
+      "version": "0.9.0"
     },
     "node-22": {
       "datasource": "node-version",
