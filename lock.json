@@ -1,7 +1,7 @@
 {
   "debian_snapshots": {
-    "debian": "20261123T145639Z",
-    "debian-security": "20261123T154646Z"
+    "debian": "20261124T202946Z",
+    "debian-security": "20261125T021308Z"
   },
   "inputs": {
     "debian-image-factory": {
