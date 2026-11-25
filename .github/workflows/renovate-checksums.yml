@@ -23,9 +23,28 @@ jobs:
           fetch-depth: 0 # the Action compares the branch with its merge base
       - uses: foreverworks/input-lock@6cf5b96d9e351f8f6d89413ad1914f0a7bc259a6 # v0.3.0
         id: lock
-      # A commit pushed with the workflow's own token starts no workflow, so CI is started by hand.
+      # A commit pushed with the workflow's own token gets a pull_request run of ci.yml that waits for
+      # approval (seen on PR #4, 2026-11-25). That waiting run is the newest
+      # check suite on the commit, so it hides any other CI run there and the required checks never
+      # report. Approve it; dispatch ci.yml only if GitHub created no such run.
       - name: run CI on the checksum commit
         if: steps.lock.outputs.changed != '0'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run ci.yml --ref "$GITHUB_REF_NAME"
+        run: |
+          sha=$(git ls-remote origin "refs/heads/$GITHUB_REF_NAME" | cut -f1)
+          echo "checksum commit: $sha"
+          for _ in $(seq 1 18); do
+            ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$sha&event=pull_request&status=action_required" \
+              --jq '.workflow_runs[] | select(.path == ".github/workflows/ci.yml") | .id')
+            if [ -n "$ids" ]; then
+              for id in $ids; do
+                echo "approving ci run $id"
+                gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$id/approve"
+              done
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "no ci run waits for approval on $sha after 3 minutes: dispatching ci.yml"
+          gh workflow run ci.yml --ref "$GITHUB_REF_NAME"

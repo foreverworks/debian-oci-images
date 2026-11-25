@@ -455,8 +455,10 @@ and deleting the interim code in the same pull request, never by leaving both.
   Action (the same version as the Renovate preset) to rewrite the checksums of the entries Renovate
   bumped. Renovate's branch gets a second commit with the new checksums, and CI's `fetch` then passes.
   Node.js entries carry `signed_by`, so their checksums come from the release's signed list and the
-  signature is checked first. A commit pushed with the workflow's own token starts no workflow, so the
-  job's last step dispatches `ci.yml` on the branch when checksums changed. The lock must stay in the
+  signature is checked first. A commit pushed with the workflow's own token gets a `pull_request` run of
+  `ci.yml` that waits for approval, and that waiting run hides any other CI run on the commit, so the
+  required checks never report (PR #4 sat blocked this way on 2026-11-25). The job's last step approves
+  that run when checksums changed, and dispatches `ci.yml` only if no such run appears within 3 minutes. The lock must stay in the
   form `input-lock format` writes, or the Action fails.
 
 ## 10. Checks this repository adds
