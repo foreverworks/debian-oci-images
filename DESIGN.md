@@ -319,7 +319,7 @@ several times a day, so a security fix reaches a pull request within minutes of 
 poller reports it, and within the hour otherwise.
 
 Renovate is set to open a snapshot pull request whatever it opened in the last hour (`prHourlyLimit` is
-0), because a pull request held back by that limit would delay a security fix by up to an hour.
+0, set by the shared preset), because a pull request held back by that limit would delay a security fix by up to an hour.
 
 The nightly keeps its own target in a cache and does not plan against the registry (section 9).
 
